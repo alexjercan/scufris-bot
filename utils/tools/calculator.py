@@ -26,8 +26,6 @@ def calculator_tool(expression: str) -> str:
         >>> calculator_tool("10 * (5 + 3)")
         "80"
     """
-    logger.info(f"📊 Calculating: {expression}")
-
     try:
         # Use eval with restricted globals/locals for safety
         # Only allow basic math operations and built-in math functions
@@ -43,9 +41,8 @@ def calculator_tool(expression: str) -> str:
         # Evaluate the expression
         result = eval(expression, {"__builtins__": {}}, allowed_names)
 
-        logger.info(f"✓ Result: {result}")
         return str(result)
     except Exception as e:
         error_msg = f"Error evaluating expression: {str(e)}"
-        logger.error(f"✗ {error_msg}")
+        logger.error(error_msg)
         return error_msg

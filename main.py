@@ -8,16 +8,24 @@ from telegram.ext import (
 
 from utils import (
     TelegramTransport,
+    ToolCallbackHandler,
     create_agent_manager,
     load_config,
     restricted,
     setup_logging,
 )
+from utils.tools import calculator_tool, datetime_tool
 
 logger = setup_logging()
 config = load_config()
-agent_manager = create_agent_manager(config)
 telegram_transport = TelegramTransport(config.allowed_user_ids)
+
+# Initialize tools and callbacks
+tools = [calculator_tool, datetime_tool]
+callback_handler = ToolCallbackHandler(telegram_transport)
+callbacks = [callback_handler]
+
+agent_manager = create_agent_manager(config, tools=tools, callbacks=callbacks)
 
 
 @restricted(config.allowed_user_ids)
@@ -33,6 +41,7 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
     try:
+        callback_handler.set_update(update)
         await telegram_transport.send_typing_action(update)
         response_text = await agent_manager.process_message(user_message)
         await telegram_transport.send_message(update, response_text)
@@ -41,6 +50,9 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await telegram_transport.send_error_message(
             update, f"getting response from AI:\n{str(e)}"
         )
+    finally:
+        # Clear the update from callback handler after processing
+        callback_handler.set_update(None)
 
 
 def main():
