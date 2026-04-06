@@ -2,6 +2,7 @@
 
 import logging
 import os
+from pathlib import Path
 from typing import List
 
 from dotenv import load_dotenv
@@ -24,9 +25,8 @@ class Config:
         self.ollama_temperature = float(os.getenv("OLLAMA_TEMPERATURE", "0.7"))
         self.ollama_reasoning = os.getenv("OLLAMA_REASONING", "true").lower() == "true"
 
-        self.system_prompt = os.getenv(
-            "SYSTEM_PROMPT", "You are a helpful assistant that can answer questions."
-        )
+        # Load system prompt from file
+        self.system_prompt = self._load_system_prompt()
 
         # Chat history configuration
         self.max_history_per_user = int(os.getenv("MAX_HISTORY_PER_USER", "20"))
@@ -43,6 +43,42 @@ class Config:
         """
         allowed_ids_str = os.getenv("ALLOWED_USER_IDS", "")
         return [int(id.strip()) for id in allowed_ids_str.split(",") if id.strip()]
+
+    def _load_system_prompt(self) -> str:
+        """
+        Load system prompt from file specified in environment variable.
+
+        Returns:
+            System prompt string
+        """
+        # Get prompt file path from env, default to system_prompt.md
+        prompt_file = os.getenv("SYSTEM_PROMPT_FILE", "system_prompt.md")
+
+        # Convert to Path object and resolve relative to project root
+        prompt_path = Path(prompt_file)
+
+        # If path is relative, make it relative to the project root
+        if not prompt_path.is_absolute():
+            # Get project root (parent of utils directory)
+            project_root = Path(__file__).parent.parent
+            prompt_path = project_root / prompt_path
+
+        # Try to load the prompt file
+        try:
+            if prompt_path.exists():
+                with open(prompt_path, "r", encoding="utf-8") as f:
+                    prompt = f.read().strip()
+                self.logger.info(f"Loaded system prompt from: {prompt_path}")
+                return prompt
+            else:
+                self.logger.warning(
+                    f"System prompt file not found: {prompt_path}. "
+                    "Using default prompt."
+                )
+                return "You are a helpful assistant that can answer questions."
+        except Exception as e:
+            self.logger.error(f"Error loading system prompt from {prompt_path}: {e}")
+            return "You are a helpful assistant that can answer questions."
 
     def _validate(self) -> None:
         """Validate required configuration values."""
