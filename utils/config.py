@@ -28,6 +28,9 @@ class Config:
             "SYSTEM_PROMPT", "You are a helpful assistant that can answer questions."
         )
 
+        # Chat history configuration
+        self.max_history_per_user = int(os.getenv("MAX_HISTORY_PER_USER", "20"))
+
         self._validate()
         self._log_configuration()
 
@@ -64,6 +67,7 @@ class Config:
             f"Ollama settings - Temperature: {self.ollama_temperature}, "
             f"Reasoning: {self.ollama_reasoning}"
         )
+        self.logger.info(f"Max history per user: {self.max_history_per_user}")
 
 
 def load_config() -> Config:

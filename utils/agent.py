@@ -59,12 +59,13 @@ class AgentManager:
             self.llm, tools=self.tools, system_prompt=config.system_prompt
         )
 
-    async def process_message(self, user_message: str) -> str:
+    async def process_message(self, messages: List[Dict[str, str]]) -> str:
         """
-        Process a user message through the agent and return the response.
+        Process messages through the agent and return the response.
 
         Args:
-            user_message: The message from the user
+            messages: List of message dictionaries with 'role' and 'content' keys
+                     This includes the conversation history plus the new message
 
         Returns:
             The agent's response text
@@ -72,11 +73,11 @@ class AgentManager:
         Raises:
             ValueError: If no response is received from the agent
         """
-        self.logger.debug(f"Processing message: {user_message}")
+        self.logger.debug(f"Processing {len(messages)} messages")
 
         # Invoke the agent with callbacks
         response = self.agent.invoke(
-            {"messages": [{"role": "user", "content": user_message}]},
+            {"messages": messages},
             config={"callbacks": self.callbacks},
         )
 

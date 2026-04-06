@@ -3,6 +3,7 @@
 from .agent import AgentManager, create_agent_manager
 from .callbacks import ToolCallbackHandler
 from .config import Config, load_config
+from .history import ChatHistoryManager, create_history_manager
 from .logging import get_logger, setup_logging
 from .telegram import TelegramTransport, restricted
 
@@ -12,6 +13,8 @@ __all__ = [
     "ToolCallbackHandler",
     "Config",
     "load_config",
+    "ChatHistoryManager",
+    "create_history_manager",
     "setup_logging",
     "get_logger",
     "TelegramTransport",
