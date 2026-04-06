@@ -1,26 +1,37 @@
 """Agent management for the Scufris Bot."""
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 from langchain.agents import create_agent
+from langchain_core.tools import BaseTool
 from langchain_ollama import ChatOllama
 
 from .config import Config
+from .tools import calculator_tool, datetime_tool
 
 
 class AgentManager:
     """Manages the LLM agent for processing messages."""
 
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, tools: Optional[List[BaseTool]] = None):
         """
         Initialize the agent manager.
 
         Args:
             config: Configuration object
+            tools: List of tools to provide to the agent (default: basic tools)
         """
         self.config = config
         self.logger = logging.getLogger("scufris-bot.agent")
+
+        if tools is None:
+            tools = self._get_default_tools()
+
+        self.tools = tools
+        self.logger.info(
+            f"Loaded {len(self.tools)} tools: {[t.name for t in self.tools]}"
+        )
 
         self.logger.info(f"Initializing LLM with model: {config.ollama_model}")
         self.llm = ChatOllama(
@@ -30,10 +41,19 @@ class AgentManager:
             temperature=config.ollama_temperature,
         )
 
-        self.logger.info("Creating agent with LLM")
+        self.logger.info("Creating agent with LLM and tools")
         self.agent = create_agent(
-            self.llm, tools=[], system_prompt=config.system_prompt
+            self.llm, tools=self.tools, system_prompt=config.system_prompt
         )
+
+    def _get_default_tools(self) -> List[BaseTool]:
+        """
+        Get the default set of tools for the agent.
+
+        Returns:
+            List of default tools
+        """
+        return [calculator_tool, datetime_tool]
 
     async def process_message(self, user_message: str) -> str:
         """
@@ -91,14 +111,17 @@ class AgentManager:
         return response_text
 
 
-def create_agent_manager(config: Config) -> AgentManager:
+def create_agent_manager(
+    config: Config, tools: Optional[List[BaseTool]] = None
+) -> AgentManager:
     """
     Create and return an agent manager instance.
 
     Args:
         config: Configuration object
+        tools: Optional list of tools to provide to the agent
 
     Returns:
         Initialized AgentManager instance
     """
-    return AgentManager(config)
+    return AgentManager(config, tools)
