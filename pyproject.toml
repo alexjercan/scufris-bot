@@ -7,6 +7,24 @@ authors = [
     { name = "Alex Jercan", email = "jercan_alex27@yahoo.com" }
 ]
 requires-python = ">=3.13"
+dependencies = [
+    "langchain>=1.2.15",
+    "langchain-ollama>=1.0.1",
+    "python-dotenv>=1.2.2",
+    "python-telegram-bot>=22.7",
+    "rich>=14.3.3",
+]
+
+[tool.mypy]
+mypy_path = "."
+
+[[tool.mypy.overrides]]
+module = ["dotenv.*"]
+follow_untyped_imports = true
+
+[[tool.mypy.overrides]]
+module = ["telegram.*"]
+follow_untyped_imports = true
 
 [tool.ruff]
 # Exclude a variety of commonly ignored directories.
@@ -89,5 +107,6 @@ docstring-code-line-length = "dynamic"
 
 [dependency-groups]
 dev = [
+    "mypy>=1.20.0",
     "ruff>=0.14.1",
 ]
