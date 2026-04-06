@@ -16,13 +16,13 @@ from utils import (
     restricted,
     setup_logging,
 )
-from utils.tools import calculator_tool, datetime_tool, web_search_tool
+from utils.tools import calculator_tool, datetime_tool, opencode_tool, web_search_tool
 
 logger = setup_logging()
 config = load_config()
 telegram_transport = TelegramTransport(config.allowed_user_ids)
 history_manager = create_history_manager(config.max_history_per_user)
-tools = [calculator_tool, datetime_tool, web_search_tool]
+tools = [calculator_tool, datetime_tool, web_search_tool, opencode_tool]
 callback_handler = ToolCallbackHandler(telegram_transport)
 callbacks = [callback_handler]
 
