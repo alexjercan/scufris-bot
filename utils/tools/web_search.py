@@ -9,13 +9,13 @@ logger = logging.getLogger("scufris-bot.tools.search")
 
 
 def search_web(query: str) -> str:
-    """Search the web using DuckDuckGo and return results.
+    """Search the web using DuckDuckGo and return results with references.
 
     Args:
         query: The search query string
 
     Returns:
-        Formatted search results as a string
+        Formatted search results with references section
     """
     try:
         # Use DDGS directly with text search only (more reliable)
@@ -25,15 +25,26 @@ def search_web(query: str) -> str:
             if not results:
                 return "No results found for the query."
 
-            # Format results nicely
+            # Format results with descriptions
             formatted_results = []
+            references = []
+
             for i, result in enumerate(results, 1):
                 title = result.get("title", "No title")
                 body = result.get("body", "No description")
                 url = result.get("href", "")
-                formatted_results.append(f"{i}. {title}\n   {body}\n   Source: {url}")
 
-            return "\n\n".join(formatted_results)
+                # Add to formatted results (without URL for cleaner reading)
+                formatted_results.append(f"{i}. {title}\n   {body}")
+
+                # Collect URLs for references section
+                references.append(f"[{i}] {url}")
+
+            # Combine results with references at the end
+            output = "\n\n".join(formatted_results)
+            output += "\n\n📚 References:\n" + "\n".join(references)
+
+            return output
 
     except Exception as e:
         logger.error(f"Web search error: {e}")
