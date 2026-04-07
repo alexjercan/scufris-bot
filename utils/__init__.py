@@ -1,6 +1,7 @@
 """Utility modules for the Scufris Bot."""
 
 from .agent import AgentManager, create_agent_manager
+from .agent_builder import setup_scufris
 from .callbacks import ToolCallbackHandler
 from .config import Config, load_config
 from .history import ChatHistoryManager, create_history_manager
@@ -10,6 +11,7 @@ from .telegram import TelegramTransport, restricted
 __all__ = [
     "AgentManager",
     "create_agent_manager",
+    "setup_scufris",
     "ToolCallbackHandler",
     "Config",
     "load_config",

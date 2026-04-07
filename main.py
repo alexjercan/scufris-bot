@@ -15,6 +15,7 @@ from utils import (
     load_config,
     restricted,
     setup_logging,
+    setup_scufris,
 )
 from utils.tools import (
     calculator_tool,
@@ -28,11 +29,25 @@ logger = setup_logging()
 config = load_config()
 telegram_transport = TelegramTransport(config.allowed_user_ids)
 history_manager = create_history_manager(config.max_history_per_user)
-tools = [calculator_tool, datetime_tool, web_search_tool, opencode_tool, weather_tool]
+
+# Setup the agent hierarchy
+main_agent = setup_scufris(
+    config=config,
+    calculator_tool=calculator_tool,
+    datetime_tool=datetime_tool,
+    web_search_tool=web_search_tool,
+    opencode_tool=opencode_tool,
+    weather_tool=weather_tool,
+)
+
+# Create callback handler and agent manager
 callback_handler = ToolCallbackHandler(telegram_transport)
 callbacks = [callback_handler]
 
-agent_manager = create_agent_manager(config, tools=tools, callbacks=callbacks)
+agent_manager = create_agent_manager(
+    agent=main_agent,
+    callbacks=callbacks,
+)
 
 
 @restricted(config.allowed_user_ids)
