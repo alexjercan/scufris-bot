@@ -71,6 +71,16 @@ class ToolCallbackHandler(BaseCallbackHandler):
         self.logger.info("✅ Tool completed")
         self.logger.info(f"   Status: {output.status}")
 
+        # Log the output content
+        output_content = (
+            str(output.content) if hasattr(output, "content") else str(output)
+        )
+        # Truncate long outputs for cleaner logs
+        max_output_length = 500
+        if len(output_content) > max_output_length:
+            output_content = output_content[:max_output_length] + "... (truncated)"
+        self.logger.info(f"   Output: {output_content}")
+
     def on_tool_error(
         self,
         error: Exception,
