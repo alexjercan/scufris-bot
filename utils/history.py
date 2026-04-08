@@ -2,7 +2,7 @@
 
 import logging
 from collections import defaultdict
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 

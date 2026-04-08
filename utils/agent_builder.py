@@ -10,7 +10,18 @@ from langchain_core.tools import BaseTool, tool
 from langchain_ollama import ChatOllama
 
 from .config import Config
-
+from .tools import (
+    calculator_tool,
+    daily_view_tool,
+    datetime_tool,
+    macros_entry_tool,
+    macros_lookup_tool,
+    notes_entry_tool,
+    opencode_tool,
+    today_create_tool,
+    weather_tool,
+    web_search_tool,
+)
 
 # =============================================================================
 # System Prompts
@@ -25,6 +36,7 @@ You have access to specialized sub-agents to help you assist users:
 - **`coding_agent`** - Handles complex coding tasks like writing code, debugging, refactoring, and file modifications
 - **`knowledge_agent`** - Searches for information using web search and provides weather information
 - **`utilities_agent`** - Performs calculations and provides date/time information
+- **`journal_agent`** - Manages daily journal entries, food macros tracking, and notes
 
 ## Guidelines
 
@@ -33,6 +45,7 @@ You have access to specialized sub-agents to help you assist users:
 - For coding-related requests, use the `coding_agent`
 - For information lookups, web searches, or weather queries, use the `knowledge_agent`
 - For calculations or date/time queries, use the `utilities_agent`
+- For journal management, food tracking, or daily notes, use the `journal_agent`
 - You can use multiple sub-agents if needed to fully answer a user's question
 
 ## Tone
@@ -112,6 +125,35 @@ Handle utility tasks including:
 - Show your work when helpful for complex calculations
 """
 
+JOURNAL_AGENT_PROMPT = """You are a specialized journal management assistant sub-agent for Scufris Bot.
+
+## Your Role
+
+Handle all daily journal and food tracking tasks including:
+- Creating and viewing daily journal entries
+- Adding food macros entries to the journal
+- Looking up nutritional information for food items
+- Adding notes to the daily journal
+- Managing "the-den" journal entries
+
+## Available Tools
+
+- **`today_create_tool`** - Create today's journal entry if it doesn't exist
+- **`daily_view_tool`** - View today's journal entry with a compact summary
+- **`macros_lookup_tool`** - Look up nutritional macros for food items (format: "food qty unit")
+- **`macros_entry_tool`** - Add food and macros to the Macros section of the journal
+- **`notes_entry_tool`** - Add notes to the Notes section of the journal
+
+## Guidelines
+
+- When a user asks to log food, first use `macros_lookup_tool` to get the nutritional info
+- After getting macros, use `macros_entry_tool` to add it to the journal
+- Food queries should be in format: "<name> <qty><unit>" (e.g., "chicken breast 100g", "egg 2pc")
+- Always ensure today's entry exists before adding content (use `today_create_tool` if needed)
+- Use `daily_view_tool` to show the current state of the journal
+- Be helpful with food tracking and encourage healthy habits
+"""
+
 
 # =============================================================================
 # Sub-Agent Builder Functions
@@ -181,7 +223,6 @@ def create_sub_agent(
 
 def create_coding_agent(
     config: Config,
-    opencode_tool: BaseTool,
     logger: logging.Logger,
 ) -> BaseTool:
     """
@@ -189,7 +230,6 @@ def create_coding_agent(
 
     Args:
         config: Configuration object
-        opencode_tool: The OpenCode tool
         logger: Logger instance
 
     Returns:
@@ -207,8 +247,6 @@ def create_coding_agent(
 
 def create_knowledge_agent(
     config: Config,
-    web_search_tool: BaseTool,
-    weather_tool: BaseTool,
     logger: logging.Logger,
 ) -> BaseTool:
     """
@@ -216,8 +254,6 @@ def create_knowledge_agent(
 
     Args:
         config: Configuration object
-        web_search_tool: The web search tool
-        weather_tool: The weather tool
         logger: Logger instance
 
     Returns:
@@ -235,8 +271,6 @@ def create_knowledge_agent(
 
 def create_utilities_agent(
     config: Config,
-    calculator_tool: BaseTool,
-    datetime_tool: BaseTool,
     logger: logging.Logger,
 ) -> BaseTool:
     """
@@ -244,8 +278,6 @@ def create_utilities_agent(
 
     Args:
         config: Configuration object
-        calculator_tool: The calculator tool
-        datetime_tool: The datetime tool
         logger: Logger instance
 
     Returns:
@@ -261,6 +293,36 @@ def create_utilities_agent(
     )
 
 
+def create_journal_agent(
+    config: Config,
+    logger: logging.Logger,
+) -> BaseTool:
+    """
+    Create the journal management sub-agent.
+
+    Args:
+        config: Configuration object
+        logger: Logger instance
+
+    Returns:
+        Journal agent as a tool
+    """
+    tools = [
+        today_create_tool,
+        daily_view_tool,
+        macros_lookup_tool,
+        macros_entry_tool,
+        notes_entry_tool,
+    ]
+    return create_sub_agent(
+        config=config,
+        name="journal_agent",
+        system_prompt=JOURNAL_AGENT_PROMPT,
+        tools=tools,
+        logger=logger,
+    )
+
+
 # =============================================================================
 # Main Setup Function
 # =============================================================================
@@ -268,28 +330,19 @@ def create_utilities_agent(
 
 def setup_scufris(
     config: Config,
-    calculator_tool: BaseTool,
-    datetime_tool: BaseTool,
-    web_search_tool: BaseTool,
-    opencode_tool: BaseTool,
-    weather_tool: BaseTool,
     callbacks: Optional[List[BaseCallbackHandler]] = None,
 ) -> Runnable:
     """
     Set up the Scufris Bot agent hierarchy.
 
-    Creates a main agent with three specialized sub-agents:
+    Creates a main agent with four specialized sub-agents:
     - coding_agent: Handles coding tasks using the opencode tool
     - knowledge_agent: Handles information retrieval using web_search and weather tools
     - utilities_agent: Handles calculations and datetime queries
+    - journal_agent: Handles daily journal and food tracking
 
     Args:
         config: Configuration object
-        calculator_tool: The calculator tool
-        datetime_tool: The datetime tool
-        web_search_tool: The web search tool
-        opencode_tool: The OpenCode tool
-        weather_tool: The weather tool
         callbacks: Optional list of callback handlers
 
     Returns:
@@ -300,16 +353,13 @@ def setup_scufris(
     logger.info("Setting up Scufris Bot agent hierarchy...")
 
     # Create sub-agents
-    coding_agent = create_coding_agent(config, opencode_tool, logger)
-    knowledge_agent = create_knowledge_agent(
-        config, web_search_tool, weather_tool, logger
-    )
-    utilities_agent = create_utilities_agent(
-        config, calculator_tool, datetime_tool, logger
-    )
+    coding_agent = create_coding_agent(config, logger)
+    knowledge_agent = create_knowledge_agent(config, logger)
+    utilities_agent = create_utilities_agent(config, logger)
+    journal_agent = create_journal_agent(config, logger)
 
     # Create the main agent with sub-agents as tools
-    main_agent_tools = [coding_agent, knowledge_agent, utilities_agent]
+    main_agent_tools = [coding_agent, knowledge_agent, utilities_agent, journal_agent]
 
     logger.info(f"Creating main agent with {len(main_agent_tools)} sub-agents")
 
