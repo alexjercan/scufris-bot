@@ -28,22 +28,22 @@
 ## Phase 1: Quick Wins (No CLI Changes Required)
 
 ### Agent Tools to Add
-- [ ] `macros_search_tool` - Fuzzy search for foods (uses existing `macros -q`)
-- [ ] `macros_insert_tool` - Add new foods to database (uses existing `macros -i`)
-- [ ] `notes_filter_tool` - View notes by tag (uses existing `daily --note`)
+- [x] `macros_search_tool` - Fuzzy search for foods (uses existing `macros -q`)
+- [x] `macros_insert_tool` - Add new foods to database (uses existing `macros -i`)
+- [x] `notes_filter_tool` - View notes by tag (uses existing `daily --note`)
 
 ### Prompt Improvements
-- [ ] Add guidance for food search workflow
-- [ ] Add instructions for handling food not found
-- [ ] Document journal structure in prompt
-- [ ] Add encouraging language for habit tracking
-- [ ] Add proactive suggestion guidelines
+- [x] Add guidance for food search workflow
+- [x] Add instructions for handling food not found
+- [x] Document journal structure in prompt
+- [x] Add encouraging language for habit tracking
+- [x] Add proactive suggestion guidelines
 
 ### Code Updates
-- [ ] Add new tools to `utils/tools/journal_tools.py`
-- [ ] Export new tools in `utils/tools/__init__.py`
-- [ ] Update `JOURNAL_AGENT_PROMPT` in `utils/agent_builder.py`
-- [ ] Update `create_journal_agent()` to include new tools
+- [x] Add new tools to `utils/tools/journal_tools.py`
+- [x] Export new tools in `utils/tools/__init__.py`
+- [x] Update `JOURNAL_AGENT_PROMPT` in `utils/agent_builder.py`
+- [x] Update `create_journal_agent()` to include new tools
 
 ---
 

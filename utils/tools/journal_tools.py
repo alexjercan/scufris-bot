@@ -200,3 +200,83 @@ def daily_view_tool(den_path: Optional[str] = None, offset: int = 0) -> str:
     if offset != 0:
         command.extend(["--offset", str(offset)])
     return run_command(command, "viewing daily journal")
+
+
+@tool
+def macros_search_tool(search_query: str) -> str:
+    """
+    Search for foods in the macros database using fuzzy matching.
+
+    This performs a fuzzy search to find foods that match the search query.
+    Useful when you don't know the exact name of a food item or want to
+    see what similar foods are available in the database.
+
+    Args:
+        search_query: The search term to find matching foods (e.g., "chick", "egg")
+
+    Returns:
+        A list of matching foods or a message if no matches found
+
+    Examples:
+        >>> macros_search_tool("chick")
+        "Foods matching 'chick':\\n  chicken breast g\\n  chicken thigh g\\n..."
+        >>> macros_search_tool("egg")
+        "Foods matching 'egg':\\n  egg pc\\n  veg mix medi g\\n..."
+    """
+    command = ["macros", "-q", search_query]
+    return run_command(command, f"searching for foods matching '{search_query}'")
+
+
+@tool
+def macros_insert_tool(food_entry: str) -> str:
+    """
+    Add a new food item to the macros database.
+
+    This inserts a new food entry into the database. The entry must be in the
+    format: "<food> <amount><unit>,<protein>,<carbs>,<fat>"
+
+    Args:
+        food_entry: The food entry to add in format "food amount unit,protein,carbs,fat"
+                   (e.g., "banana 100g,1,23,0.3")
+
+    Returns:
+        Success message or error information
+
+    Examples:
+        >>> macros_insert_tool("banana 100g,1,23,0.3")
+        "✓ Added 'banana 100g' to macros database"
+        >>> macros_insert_tool("custom recipe 100g,30,40,10")
+        "✓ Added 'custom recipe 100g' to macros database"
+    """
+    command = ["macros", "-i", food_entry]
+    return run_command(command, f"adding '{food_entry}' to macros database")
+
+
+@tool
+def notes_filter_tool(tag: str, den_path: Optional[str] = None) -> str:
+    """
+    View notes filtered by a specific tag.
+
+    This shows only notes that have the specified tag. Notes are tagged using
+    the format "note :: <TAG>" in the journal entry.
+
+    Args:
+        tag: The tag to filter notes by (e.g., "workout", "ideas", "meetings")
+        den_path: Optional path to the den directory (defaults to /home/alex/personal/the-den)
+
+    Returns:
+        Notes matching the specified tag
+
+    Examples:
+        >>> notes_filter_tool("workout")
+        "Notes with tag 'workout':\\n- Great session at gym\\n..."
+        >>> notes_filter_tool("ideas")
+        "Notes with tag 'ideas':\\n- New feature idea\\n..."
+    """
+    # Note: The 'daily' command uses its own default path
+    if den_path and den_path != DEFAULT_DEN_PATH:
+        command = ["daily", den_path, "--note", tag]
+    else:
+        command = ["daily", "--note", tag]
+
+    return run_command(command, f"viewing notes with tag '{tag}'")
