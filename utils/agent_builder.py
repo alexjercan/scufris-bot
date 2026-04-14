@@ -14,6 +14,7 @@ from .tools import (
     calculator_tool,
     daily_view_tool,
     datetime_tool,
+    habits_toggle_tool,
     macros_entry_tool,
     macros_insert_tool,
     macros_lookup_tool,
@@ -21,9 +22,15 @@ from .tools import (
     notes_entry_tool,
     notes_filter_tool,
     opencode_tool,
+    tasks_entry_tool,
+    tasks_remove_tool,
+    tasks_toggle_tool,
+    tasks_tomorrow_entry_tool,
+    tasks_tomorrow_remove_tool,
     today_create_tool,
     weather_tool,
     web_search_tool,
+    weight_entry_tool,
 )
 
 # =============================================================================
@@ -155,12 +162,27 @@ Each daily entry contains these sections:
 **Journal Entry Management:**
 - `today_create_tool` - Create today's journal entry if it doesn't exist
 - `daily_view_tool` - View journal entry with a compact summary
+  - Use `offset` parameter for historical viewing (e.g., offset=-1 for yesterday, offset=-7 for last week)
+  - Default offset=0 shows today's entry
 
 **Food Tracking:**
 - `macros_lookup_tool` - Look up exact nutritional macros for food items (format: "food qty unit")
 - `macros_search_tool` - Search for foods in database using fuzzy matching
 - `macros_entry_tool` - Add food and macros to the Macros section
 - `macros_insert_tool` - Add new food items to the macros database
+
+**Habit Tracking:**
+- `habits_toggle_tool` - Toggle habit completion (Learn, Gym, Track Macros)
+
+**Task Management:**
+- `tasks_entry_tool` - Add tasks to Today's Tasks section (with checkbox)
+- `tasks_tomorrow_entry_tool` - Add tasks to Tomorrow section (without checkbox)
+- `tasks_toggle_tool` - Mark tasks as complete/incomplete by index (1-based)
+- `tasks_remove_tool` - Remove tasks from Today's Tasks by index
+- `tasks_tomorrow_remove_tool` - Remove tasks from Tomorrow by index
+
+**Weight Tracking:**
+- `weight_entry_tool` - Log weight for the day (adds/updates weight entry)
 
 **Notes:**
 - `notes_entry_tool` - Add notes to the Notes section
@@ -201,6 +223,47 @@ Each daily entry contains these sections:
 - Use `notes_filter_tool` to find notes with specific tags
 - Common tags might include: workout, ideas, meetings, reminders, etc.
 - Encourage users to tag notes for better organization
+
+**When adding tagged notes:**
+- If user says "add a note about X", format it as: "note :: X\n\n<actual note content>"
+- Example: User says "add a note about workout"
+  - You add: "note :: workout\n\nHad a great session today..."
+- The tag line comes first, followed by the actual note content
+- Tags help with filtering and organization using `notes_filter_tool`
+
+## Guidelines for Habit Tracking
+
+**When tracking habits:**
+- Use `habits_toggle_tool` to mark habits as complete or incomplete
+- Habit names are matched case-insensitively (e.g., "gym", "Gym", "GYM" all work)
+- Common habits: "Learn", "Gym", "Track Macros"
+- Be encouraging when users complete habits
+- Suggest viewing daily summary after completing habits
+
+## Guidelines for Task Management
+
+**When managing tasks:**
+- Use `tasks_entry_tool` to add tasks to Today's Tasks (creates checkbox "- [ ] task")
+- Use `tasks_tomorrow_entry_tool` to add tasks to Tomorrow section (creates bullet "- task")
+- Use `tasks_toggle_tool` with 1-based index to mark tasks complete/incomplete
+- Use `tasks_remove_tool` to remove tasks from Today's Tasks by index
+- Use `tasks_tomorrow_remove_tool` to remove tasks from Tomorrow by index
+- Tasks are numbered starting from 1 (first task is index 1)
+- Tasks in Today's Tasks have checkboxes and are actionable for today
+- Tasks in Tomorrow are planning items without checkboxes
+- Help users prioritize by suggesting which tasks are most important
+- Encourage breaking down large tasks into smaller, actionable items
+- When removing tasks, confirm the action to avoid accidental deletion
+
+## Guidelines for Weight Tracking
+
+**When logging weight:**
+- Use `weight_entry_tool` to log weight for the day
+- Accept various formats: "75", "75Kg", "75 Kg" (all normalized to "75 Kg")
+- If a weight entry already exists for the day, it will be updated with the new value
+- Weight format in journal: "weight :: VALUE Kg"
+- Encourage regular weight tracking for trend analysis
+- Be supportive and non-judgmental about weight changes
 
 ## Guidelines for Daily Stats
 
@@ -384,6 +447,13 @@ def create_journal_agent(
         macros_insert_tool,
         notes_entry_tool,
         notes_filter_tool,
+        habits_toggle_tool,
+        tasks_entry_tool,
+        tasks_tomorrow_entry_tool,
+        tasks_toggle_tool,
+        tasks_remove_tool,
+        tasks_tomorrow_remove_tool,
+        weight_entry_tool,
     ]
     return create_sub_agent(
         config=config,

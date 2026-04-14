@@ -280,3 +280,251 @@ def notes_filter_tool(tag: str, den_path: Optional[str] = None) -> str:
         command = ["daily", "--note", tag]
 
     return run_command(command, f"viewing notes with tag '{tag}'")
+
+
+@tool
+def habits_toggle_tool(
+    habit_name: str, den_path: Optional[str] = None, offset: int = 0
+) -> str:
+    """
+    Toggle the completion status of a habit checkbox.
+
+    This toggles a habit between completed [x] and incomplete [ ] status.
+    The habit name is matched case-insensitively.
+
+    Args:
+        habit_name: The name of the habit to toggle (e.g., "Gym", "Learn", "Track Macros")
+        den_path: Optional path to the den directory (defaults to /home/alex/personal/the-den)
+        offset: Number of days to offset from today (default: 0)
+
+    Returns:
+        Success message or error information
+
+    Examples:
+        >>> habits_toggle_tool("Gym")
+        "✓ Toggled habit 'Gym'"
+        >>> habits_toggle_tool("Learn", offset=-1)
+        "✓ Toggled habit 'Learn'"
+    """
+    # Note: The 'daily' command uses its own default path
+    if den_path and den_path != DEFAULT_DEN_PATH:
+        command = ["daily", den_path, "--toggle-habit", habit_name]
+    else:
+        command = ["daily", "--toggle-habit", habit_name]
+
+    if offset != 0:
+        command.extend(["--offset", str(offset)])
+    return run_command(command, f"toggling habit '{habit_name}'")
+
+
+@tool
+def tasks_entry_tool(
+    task_text: str, den_path: Optional[str] = None, offset: int = 0
+) -> str:
+    """
+    Add a task to the Today's Tasks section.
+
+    This adds a new task with a checkbox to the Today's Tasks section.
+    The task will have the format "- [ ] <task_text>".
+
+    Args:
+        task_text: The task description to add
+        den_path: Optional path to the den directory (defaults to /home/alex/personal/the-den)
+        offset: Number of days to offset from today (default: 0)
+
+    Returns:
+        Success message or error information
+
+    Examples:
+        >>> tasks_entry_tool("Review pull request")
+        "✓ Added task to Today's Tasks"
+        >>> tasks_entry_tool("Call dentist", offset=1)
+        "✓ Added task to Today's Tasks"
+    """
+    # Note: The 'daily' command uses its own default path
+    if den_path and den_path != DEFAULT_DEN_PATH:
+        command = ["daily", den_path, "--task-entry", task_text]
+    else:
+        command = ["daily", "--task-entry", task_text]
+
+    if offset != 0:
+        command.extend(["--offset", str(offset)])
+    return run_command(command, "adding task to Today's Tasks")
+
+
+@tool
+def tasks_tomorrow_entry_tool(
+    task_text: str, den_path: Optional[str] = None, offset: int = 0
+) -> str:
+    """
+    Add a task to the Tomorrow section.
+
+    This adds a new task as a bullet point (without checkbox) to the Tomorrow section.
+    The task will have the format "- <task_text>".
+
+    Args:
+        task_text: The task description to add
+        den_path: Optional path to the den directory (defaults to /home/alex/personal/the-den)
+        offset: Number of days to offset from today (default: 0)
+
+    Returns:
+        Success message or error information
+
+    Examples:
+        >>> tasks_tomorrow_entry_tool("Prepare presentation")
+        "✓ Added task to Tomorrow"
+        >>> tasks_tomorrow_entry_tool("Buy groceries", offset=1)
+        "✓ Added task to Tomorrow"
+    """
+    # Note: The 'daily' command uses its own default path
+    if den_path and den_path != DEFAULT_DEN_PATH:
+        command = ["daily", den_path, "--task-tomorrow-entry", task_text]
+    else:
+        command = ["daily", "--task-tomorrow-entry", task_text]
+
+    if offset != 0:
+        command.extend(["--offset", str(offset)])
+    return run_command(command, "adding task to Tomorrow")
+
+
+@tool
+def tasks_toggle_tool(
+    task_index: int, den_path: Optional[str] = None, offset: int = 0
+) -> str:
+    """
+    Toggle the completion status of a task by index.
+
+    This toggles a task in Today's Tasks section between completed [x] and
+    incomplete [ ] status. Tasks are indexed starting from 1.
+
+    Args:
+        task_index: The 1-based index of the task to toggle
+        den_path: Optional path to the den directory (defaults to /home/alex/personal/the-den)
+        offset: Number of days to offset from today (default: 0)
+
+    Returns:
+        Success message or error information
+
+    Examples:
+        >>> tasks_toggle_tool(1)
+        "✓ Toggled task #1"
+        >>> tasks_toggle_tool(2, offset=-1)
+        "✓ Toggled task #2"
+    """
+    # Note: The 'daily' command uses its own default path
+    if den_path and den_path != DEFAULT_DEN_PATH:
+        command = ["daily", den_path, "--toggle-task", str(task_index)]
+    else:
+        command = ["daily", "--toggle-task", str(task_index)]
+
+    if offset != 0:
+        command.extend(["--offset", str(offset)])
+    return run_command(command, f"toggling task #{task_index}")
+
+
+@tool
+def weight_entry_tool(
+    weight_value: str, den_path: Optional[str] = None, offset: int = 0
+) -> str:
+    """
+    Log weight for the day.
+
+    This adds or updates the weight entry in the Weight section of the journal.
+    If a weight entry already exists for the day, it will be updated with the new value.
+
+    Args:
+        weight_value: The weight value (e.g., "75", "75Kg", "75 Kg", "165lbs")
+                     Note: Currently only Kg is supported in storage
+        den_path: Optional path to the den directory (defaults to /home/alex/personal/the-den)
+        offset: Number of days to offset from today (default: 0)
+
+    Returns:
+        Success message or error information
+
+    Examples:
+        >>> weight_entry_tool("75")
+        "✓ Added/updated weight entry to 75 Kg"
+        >>> weight_entry_tool("75Kg")
+        "✓ Added/updated weight entry to 75 Kg"
+        >>> weight_entry_tool("74.5", offset=-1)
+        "✓ Added/updated weight entry to 74.5 Kg"
+    """
+    # Note: The 'daily' command uses its own default path
+    if den_path and den_path != DEFAULT_DEN_PATH:
+        command = ["daily", den_path, "--weight-entry", weight_value]
+    else:
+        command = ["daily", "--weight-entry", weight_value]
+
+    if offset != 0:
+        command.extend(["--offset", str(offset)])
+    return run_command(command, f"adding/updating weight entry")
+
+
+@tool
+def tasks_remove_tool(
+    task_index: int, den_path: Optional[str] = None, offset: int = 0
+) -> str:
+    """
+    Remove a task from Today's Tasks section by index.
+
+    This permanently removes a task from the Today's Tasks section.
+    Tasks are indexed starting from 1.
+
+    Args:
+        task_index: The 1-based index of the task to remove
+        den_path: Optional path to the den directory (defaults to /home/alex/personal/the-den)
+        offset: Number of days to offset from today (default: 0)
+
+    Returns:
+        Success message or error information
+
+    Examples:
+        >>> tasks_remove_tool(1)
+        "✓ Removed task #1 from Today's Tasks"
+        >>> tasks_remove_tool(3, offset=-1)
+        "✓ Removed task #3 from Today's Tasks"
+    """
+    # Note: The 'daily' command uses its own default path
+    if den_path and den_path != DEFAULT_DEN_PATH:
+        command = ["daily", den_path, "--task-remove", str(task_index)]
+    else:
+        command = ["daily", "--task-remove", str(task_index)]
+
+    if offset != 0:
+        command.extend(["--offset", str(offset)])
+    return run_command(command, f"removing task #{task_index} from Today's Tasks")
+
+
+@tool
+def tasks_tomorrow_remove_tool(
+    task_index: int, den_path: Optional[str] = None, offset: int = 0
+) -> str:
+    """
+    Remove a task from Tomorrow section by index.
+
+    This permanently removes a task from the Tomorrow section.
+    Tasks are indexed starting from 1.
+
+    Args:
+        task_index: The 1-based index of the task to remove
+        den_path: Optional path to the den directory (defaults to /home/alex/personal/the-den)
+        offset: Number of days to offset from today (default: 0)
+
+    Returns:
+        Success message or error information
+
+    Examples:
+        >>> tasks_tomorrow_remove_tool(1)
+        "✓ Removed task #1 from Tomorrow"
+        >>> tasks_tomorrow_remove_tool(2, offset=-1)
+        "✓ Removed task #2 from Tomorrow"
+    """
+    # Note: The 'daily' command uses its own default path
+    if den_path and den_path != DEFAULT_DEN_PATH:
+        command = ["daily", den_path, "--task-tomorrow-remove", str(task_index)]
+    else:
+        command = ["daily", "--task-tomorrow-remove", str(task_index)]
+
+    if offset != 0:
+        command.extend(["--offset", str(offset)])
+    return run_command(command, f"removing task #{task_index} from Tomorrow")
