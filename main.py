@@ -16,6 +16,7 @@ from utils import (
     restricted,
     setup_logging,
     setup_scufris,
+    truncate_log,
 )
 
 logger = setup_logging()
@@ -39,6 +40,10 @@ agent_manager = create_agent_manager(
 @restricted(config.allowed_user_ids)
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle regular chat messages using the Ollama LLM Agent"""
+    import time
+
+    request_start = time.time()
+
     user_message = telegram_transport.get_message_text(update)
     if not user_message:
         return
@@ -47,7 +52,7 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = user_info["id"]
 
     logger.info(
-        f"Received message from {user_info['username']}: {user_message[:100]}..."
+        f"User {user_info['username']} (ID:{user_id}): {truncate_log(user_message, 100)}"
     )
 
     try:
@@ -60,20 +65,34 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         # Get history with new message for the agent
         messages = history_manager.get_history_with_new_message(user_id, user_message)
 
-        logger.debug(f"Processing with {len(messages)} messages in history")
+        logger.debug(f"Processing {len(messages)} messages in history")
 
         # Process the message with history
+        process_start = time.time()
         response_text = await agent_manager.process_message(messages)
+        process_duration = time.time() - process_start
 
         # Add messages to history
         history_manager.add_user_message(user_id, user_message)
         history_manager.add_ai_message(user_id, response_text)
 
         # Send the response
+        send_start = time.time()
         await telegram_transport.send_message(update, response_text)
+        send_duration = time.time() - send_start
+
+        total_duration = time.time() - request_start
+
+        logger.info(
+            f"Request completed | total={total_duration:.2f}s "
+            f"(process={process_duration:.2f}s, send={send_duration:.2f}s) | "
+            f"response={len(response_text)} chars"
+        )
 
     except Exception as e:
-        logger.error(f"Error getting AI response: {str(e)}", exc_info=True)
+        logger.error(
+            f"Error processing request for user {user_id}: {str(e)}", exc_info=True
+        )
         await telegram_transport.send_error_message(
             update, f"getting response from AI:\n{str(e)}"
         )
@@ -91,7 +110,9 @@ async def clear_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     message_count = history_manager.get_message_count(user_id)
     history_manager.clear_history(user_id)
 
-    logger.info(f"Cleared {message_count} messages for user {user_info['username']}")
+    logger.info(
+        f"Cleared {message_count} messages for user {user_info['username']} (ID:{user_id})"
+    )
 
     await update.message.reply_text(
         f"🗑️ Cleared {message_count} messages from your chat history."

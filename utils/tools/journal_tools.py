@@ -173,23 +173,30 @@ def macros_lookup_tool(food_query: str) -> str:
 @tool
 def daily_view_tool(den_path: Optional[str] = None, offset: int = 0) -> str:
     """
-    View today's journal entry with a compact summary.
+    View the daily journal summary showing habits, tasks, macros, weight, and notes.
 
-    This outputs a compact view of today's journal entry, including
-    details about food, tasks, and other tracked information.
+    Use this tool when the user asks for:
+    - A summary of their day
+    - Today's journal / daily view / daily summary
+    - What they tracked today
+    - Their progress, macros, tasks, or habits
+    - To see their journal entry
+
+    This shows everything tracked for the day including habits completion,
+    today's tasks, macros totals, weight, and notes.
 
     Args:
         den_path: Optional path to the den directory (defaults to /home/alex/personal/the-den)
-        offset: Number of days to offset from today (default: 0, use negative for past days)
+        offset: Number of days offset from today (0=today, -1=yesterday, -7=last week)
 
     Returns:
-        A compact summary of the journal entry
+        A complete summary of the journal entry for the specified day
 
     Examples:
-        >>> daily_view_tool()
-        "📅 2026-04-08\\n\\n### 🍽️ Macros\\n..."
-        >>> daily_view_tool(offset=-1)
-        "📅 2026-04-07\\n\\n### 🍽️ Macros\\n..."
+        >>> daily_view_tool()  # Show today's summary
+        "# Tuesday, April 14, 2026\\n\\n### 🌱 Habits\\n- [x] Gym\\n..."
+        >>> daily_view_tool(offset=-1)  # Show yesterday's summary
+        "# Monday, April 13, 2026\\n\\n### 🌱 Habits\\n..."
     """
     # Note: The 'daily' command uses its own default path
     if den_path and den_path != DEFAULT_DEN_PATH:

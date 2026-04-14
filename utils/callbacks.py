@@ -1,6 +1,7 @@
 """Callback handlers for the Scufris Bot agent."""
 
 import logging
+import time
 from typing import Any, Dict, List, Optional
 
 from langchain_core.callbacks import BaseCallbackHandler
@@ -8,6 +9,7 @@ from langchain_core.messages import ToolMessage
 from langchain_core.outputs import LLMResult
 from telegram import Update
 
+from .logging import truncate_log
 from .telegram import TelegramTransport
 
 
@@ -28,6 +30,11 @@ class ToolCallbackHandler(BaseCallbackHandler):
         self.telegram_transport = telegram_transport
         self.update = update
         self.logger = logging.getLogger("scufris-bot.agent.tools")
+
+        # Track timing for tools and chains
+        self._tool_start_time: Optional[float] = None
+        self._tool_name: Optional[str] = None
+        self._llm_start_time: Optional[float] = None
 
     def set_update(self, update: Update) -> None:
         """
@@ -52,9 +59,13 @@ class ToolCallbackHandler(BaseCallbackHandler):
             input_str: Input to the tool
             **kwargs: Additional keyword arguments
         """
-        tool_name = serialized.get("name", "unknown") if serialized else "unknown"
-        self.logger.info(f"🔧 Tool started: {tool_name}")
-        self.logger.info(f"   Input: {input_str}")
+        self._tool_name = serialized.get("name", "unknown") if serialized else "unknown"
+        self._tool_start_time = time.time()
+
+        # Log detailed input at DEBUG level
+        self.logger.debug(
+            f"Tool '{self._tool_name}' started | input: {truncate_log(input_str, 200)}"
+        )
 
     def on_tool_end(
         self,
@@ -68,18 +79,24 @@ class ToolCallbackHandler(BaseCallbackHandler):
             output: Output from the tool
             **kwargs: Additional keyword arguments
         """
-        self.logger.info("✅ Tool completed")
-        self.logger.info(f"   Status: {output.status}")
+        # Calculate duration
+        duration = time.time() - self._tool_start_time if self._tool_start_time else 0
 
-        # Log the output content
+        # Get output content
         output_content = (
             str(output.content) if hasattr(output, "content") else str(output)
         )
-        # Truncate long outputs for cleaner logs
-        max_output_length = 500
-        if len(output_content) > max_output_length:
-            output_content = output_content[:max_output_length] + "... (truncated)"
-        self.logger.info(f"   Output: {output_content}")
+        output_len = len(output_content)
+        status = getattr(output, "status", "unknown")
+
+        # Consolidated INFO log
+        self.logger.info(
+            f"Tool '{self._tool_name}' completed | duration={duration:.2f}s | "
+            f"status={status} | output={output_len} chars"
+        )
+
+        # Detailed output at DEBUG level
+        self.logger.debug(f"Tool output: {truncate_log(output_content, 500)}")
 
     def on_tool_error(
         self,
@@ -93,7 +110,10 @@ class ToolCallbackHandler(BaseCallbackHandler):
             error: The error that occurred
             **kwargs: Additional keyword arguments
         """
-        self.logger.error(f"❌ Tool error: {str(error)}")
+        duration = time.time() - self._tool_start_time if self._tool_start_time else 0
+        self.logger.error(
+            f"Tool '{self._tool_name}' failed | duration={duration:.2f}s | error: {str(error)}"
+        )
 
     def on_llm_start(
         self,
@@ -109,7 +129,8 @@ class ToolCallbackHandler(BaseCallbackHandler):
             prompts: Prompts sent to the LLM
             **kwargs: Additional keyword arguments
         """
-        self.logger.debug("🤖 LLM invoked")
+        self._llm_start_time = time.time()
+        self.logger.debug("LLM invoked")
 
     def on_llm_end(
         self,
@@ -123,7 +144,8 @@ class ToolCallbackHandler(BaseCallbackHandler):
             response: Response from the LLM
             **kwargs: Additional keyword arguments
         """
-        self.logger.debug("🤖 LLM response received")
+        duration = time.time() - self._llm_start_time if self._llm_start_time else 0
+        self.logger.debug(f"LLM response received | duration={duration:.2f}s")
 
     def on_chain_start(
         self,
@@ -140,7 +162,7 @@ class ToolCallbackHandler(BaseCallbackHandler):
             **kwargs: Additional keyword arguments
         """
         chain_name = serialized.get("name", "unknown") if serialized else "unknown"
-        self.logger.debug(f"⛓️  Chain started: {chain_name}")
+        self.logger.debug(f"Chain started: {chain_name}")
 
     def on_chain_end(
         self,
@@ -154,7 +176,7 @@ class ToolCallbackHandler(BaseCallbackHandler):
             outputs: Outputs from the chain
             **kwargs: Additional keyword arguments
         """
-        self.logger.debug("⛓️  Chain completed")
+        self.logger.debug("Chain completed")
 
     def on_chain_error(
         self,
@@ -168,7 +190,7 @@ class ToolCallbackHandler(BaseCallbackHandler):
             error: The error that occurred
             **kwargs: Additional keyword arguments
         """
-        self.logger.error(f"⛓️  Chain error: {str(error)}")
+        self.logger.error(f"Chain error: {str(error)}")
 
     def on_agent_action(
         self,
@@ -185,8 +207,8 @@ class ToolCallbackHandler(BaseCallbackHandler):
         tool_name = action.tool if hasattr(action, "tool") else "unknown"
         tool_input = action.tool_input if hasattr(action, "tool_input") else {}
 
-        self.logger.info(f"🎯 Agent decision: Use tool '{tool_name}'")
-        self.logger.debug(f"   Tool input: {tool_input}")
+        # Move to DEBUG level to reduce verbosity
+        self.logger.debug(f"Agent invoking tool '{tool_name}' | input: {tool_input}")
 
     def on_agent_finish(
         self,
@@ -200,4 +222,4 @@ class ToolCallbackHandler(BaseCallbackHandler):
             finish: The finish information
             **kwargs: Additional keyword arguments
         """
-        self.logger.debug("🏁 Agent finished")
+        self.logger.debug("Agent finished")

@@ -5,7 +5,7 @@ from .agent_builder import setup_scufris
 from .callbacks import ToolCallbackHandler
 from .config import Config, load_config
 from .history import ChatHistoryManager, create_history_manager
-from .logging import get_logger, setup_logging
+from .logging import get_logger, setup_logging, truncate_log
 from .telegram import TelegramTransport, restricted
 
 __all__ = [
@@ -19,6 +19,7 @@ __all__ = [
     "create_history_manager",
     "setup_logging",
     "get_logger",
+    "truncate_log",
     "TelegramTransport",
     "restricted",
 ]
