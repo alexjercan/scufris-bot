@@ -110,12 +110,12 @@
         # Are excluded but things like binaries, man pages, systemd units etc are included.
         packages.default = mkApplication {
           venv = pythonSet.mkVirtualEnv "scufris-env" workspace.deps.default;
-          package = pythonSet.scufris;
+          package = pythonSet.scufris-bot;
         };
 
         apps.default = {
           type = "app";
-          program = "${self.packages.${system}.default}/bin/highlights";
+          program = "${self.packages.${system}.default}/bin/scufris-bot";
         };
 
         devShells.default = pkgs.mkShell {
@@ -146,6 +146,54 @@
         # The usual flake attributes can be defined here, including system-
         # agnostic ones like nixosModule and system-enumerating ones, although
         # those are more easily expressed in perSystem.
+
+        homeManagerModules.default = {config, lib, pkgs, ...}: let
+          cfg = config.services.scufris-bot;
+        in {
+          options.services.scufris-bot = {
+            enable = lib.mkEnableOption "Scufris Bot - Telegram bot with AI agent";
+
+            environmentFile = lib.mkOption {
+              type = lib.types.nullOr lib.types.path;
+              default = null;
+              example = "\${config.home.homeDirectory}/personal/scufris-bot/.env";
+              description = ''
+                Environment file containing secrets (TELEGRAM_BOT_TOKEN, ALLOWED_USER_IDS, etc).
+                This file should contain KEY=value pairs, one per line.
+              '';
+            };
+
+            package = lib.mkOption {
+              type = lib.types.package;
+              default = self.packages.${pkgs.system}.default;
+              description = "The scufris-bot package to use.";
+            };
+          };
+
+          config = lib.mkIf cfg.enable {
+            systemd.user.services.scufris-bot = {
+              Unit = {
+                Description = "Scufris Bot - Telegram bot with AI agent";
+                After = [ "network-online.target" ];
+              };
+
+              Service = {
+                Type = "simple";
+                WorkingDirectory = config.home.homeDirectory;
+                ExecStart = "${cfg.package}/bin/scufris-bot";
+                Restart = "always";
+                RestartSec = "10s";
+
+                # Load environment variables from file
+                EnvironmentFile = lib.mkIf (cfg.environmentFile != null) cfg.environmentFile;
+              };
+
+              Install = {
+                WantedBy = [ "default.target" ];
+              };
+            };
+          };
+        };
       };
     };
 }

@@ -19,6 +19,17 @@ dependencies = [
     "rich>=14.3.3",
 ]
 
+[project.scripts]
+scufris-bot = "main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["utils"]
+only-include = ["utils", "main.py"]
+
 [tool.mypy]
 mypy_path = "."
 
