@@ -1,6 +1,6 @@
 # Unit tests — utils/callbacks.py (parsers + dispatch)
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 17
 - TAGS: testing,quality
 
@@ -66,10 +66,22 @@ from `uuid.uuid4()`. No real LLM, no network.
 
 ## Acceptance criteria
 
-- [ ] Pure-helper tests are deterministic and instant.
-- [ ] Lifecycle tests don't touch real LLM or network.
-- [ ] Telemetry-handoff assertions use a tmp log file + env
+- [x] Pure-helper tests are deterministic and instant.
+- [x] Lifecycle tests don't touch real LLM or network.
+- [x] Telemetry-handoff assertions use a tmp log file + env
       monkeypatching; nothing leaks into `logs/`.
+
+## Post-hoc notes
+
+- Landed as `tests/test_callbacks.py` (42 tests, ~0.4s).
+- For lifecycle tests, the handler tracks runs by `run_id`, so each
+  `on_tool_end` / `on_tool_error` test must reuse the exact UUID
+  passed to its `on_tool_start`. Generate once per test, not once
+  per fixture.
+- `_FakeOutput` only needs `.content` and `.status` — anything else
+  the handler reads is wrapped in `getattr(..., default)`.
+- "Unknown run_id is no-op" case asserts the absence of telemetry
+  events; no exception is raised, the call is silently dropped.
 
 ## Dependencies
 

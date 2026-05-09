@@ -1,6 +1,6 @@
 # Unit tests — journal_tools (subprocess mocks)
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 13
 - TAGS: testing,quality
 
@@ -60,10 +60,19 @@ a recorder that captures `argv` and returns a configurable
 
 ## Acceptance criteria
 
-- [ ] No real subprocess is spawned.
-- [ ] Argv-shape assertions cover every tool at least once for the
+- [x] No real subprocess is spawned.
+- [x] Argv-shape assertions cover every tool at least once for the
       default code path; offset-bearing tools also cover the
       `offset != 0` branch.
+
+## Post-hoc notes
+
+- Landed as `tests/test_journal_tools.py` (23 tests, ~0.4s).
+- Same `sys.modules["utils.tools.journal_tools"]` trick as the HTTP
+  tools file — package `__init__.py` rebinds the attribute.
+- Recorder fixture returns a `_FakeCompleted` with `.stdout`/`.stderr`
+  rather than the real `subprocess.CompletedProcess` (no `args`/
+  `returncode` needed by `run_command`).
 
 ## Dependencies
 

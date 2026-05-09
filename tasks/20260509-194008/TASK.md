@@ -1,6 +1,6 @@
 # Unit tests — pure tools (calculator, datetime_tool)
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 15
 - TAGS: testing,quality
 
@@ -39,10 +39,19 @@ Tiny, low-risk tests for the two stdlib-only tools.
 
 ## Acceptance criteria
 
-- [ ] All tests pass with no I/O.
-- [ ] `calculator_tool` security cases assert the *string* (no
+- [x] All tests pass with no I/O.
+- [x] `calculator_tool` security cases assert the *string* (no
       sandbox escape claim implied — `eval` with restricted globals
       is shallow, but the tests document the contract).
+
+## Post-hoc notes
+
+- Landed as `tests/test_pure_tools.py` (22 tests, ~0.4s).
+- `datetime_tool` validates input via the `@tool` schema, so passing
+  `format=None` through `.invoke({...})` fails schema validation
+  rather than reaching the error branch. Use `datetime_tool.func(...)`
+  to bypass schema and trigger the actual `Error formatting datetime`
+  path.
 
 ## Dependencies
 

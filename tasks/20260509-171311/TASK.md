@@ -145,3 +145,29 @@ Async or sync, depending on the chosen pytest-asyncio scope.
 
 Recommended sequencing: ship 3.3 first, then this task, then the
 remaining UI polish (3.4, 3.5) lands on top of a tested foundation.
+
+## Post-hoc notes
+
+- Bootstrap landed: `pytest>=9.0.3` added via `uv add --dev pytest` in
+  the nix devshell (uv2nix rebuilds the venv on next `nix develop`).
+  `[tool.pytest.ini_options]` block added to `pyproject.toml` with
+  `testpaths = ["tests"]` and `addopts = "-q"`.
+- 37 tests, 0.40s wall, 10/10 green on rerun.
+- Stub strategy for sub-agent tests: monkey-patched both
+  `agent_builder.ChatOllama` (sentinel object) and
+  `agent_builder.create_agent` (returns a `_StubAgent` that records
+  every `.invoke` and appends a canned `AIMessage`). This sidesteps
+  the inner LangChain agent loop entirely. The stub agent itself
+  uses sync `.invoke` rather than async; `AgentManager.process_message`
+  is async and tested via `asyncio.run`. No `pytest-asyncio` needed.
+- LangChain `@tool`-wrapped functions are invoked via
+  `tool.invoke({"query": ..., "context": ...}, config={"configurable":
+  {"user_id": N}})`. The `RunnableConfig` parameter on the wrapped
+  function is auto-injected from this `config` kwarg.
+- Six follow-up unit-test tatr tasks filed for the rest of the
+  testable surface (telemetry, callbacks, stats, pure tools, HTTP
+  tools, journal subprocess wrappers): `20260509-194005` through
+  `20260509-194010`, priorities 18→13.
+- One pre-existing `DeprecationWarning` surfaces under pytest:
+  `utils/history.py:226` uses `datetime.utcnow()`. Not in scope here;
+  worth a low-pri tatr if it's not already captured.

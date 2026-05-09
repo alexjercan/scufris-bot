@@ -1,6 +1,6 @@
 # Unit tests — HTTP tools (weather, web_search, opencode) with mocks
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 14
 - TAGS: testing,quality
 
@@ -66,8 +66,26 @@ Mock `utils.tools.opencode_tool.Opencode` (the SDK client class):
 
 ## Acceptance criteria
 
-- [ ] No test makes a real HTTP request.
-- [ ] Each tool has at least one happy-path + one failure-path test.
+- [x] No test makes a real HTTP request.
+- [x] Each tool has at least one happy-path + one failure-path test.
+
+## Post-hoc notes
+
+- Landed as `tests/test_http_tools.py` (16 tests, ~0.4s).
+- **Gotcha**: `utils/tools/__init__.py` does
+  `from .weather_tool import weather_tool`, which rebinds the parent
+  package's `weather_tool` *attribute* to the StructuredTool. So
+  `import utils.tools.weather_tool as weather_mod` yields the tool
+  object, not the module. Use
+  `weather_mod = sys.modules["utils.tools.weather_tool"]` to grab
+  the real module for monkeypatching `requests.get`. Same trick for
+  `web_search` and `opencode_tool`.
+- Bogus `{}` payload doesn't trigger the parsing-error branch (because
+  `.get` defaults handle every key); test asserts forecast is omitted
+  and location is rendered verbatim instead.
+- For `APIConnectionError`, the SDK constructor requires a `request`
+  arg; passing `request=None` works in tests because the handler only
+  reads the message.
 
 ## Dependencies
 

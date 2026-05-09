@@ -1,6 +1,6 @@
 # Unit tests — utils/telemetry.py
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 18
 - TAGS: testing,quality
 
@@ -51,10 +51,20 @@ JSONL telemetry module added in `tasks/20260509-165516`.
 
 ## Acceptance criteria
 
-- [ ] All tests pass.
-- [ ] No real file written outside `tmp_path`.
-- [ ] `SCUFRIS_TELEMETRY` is restored to its pre-test value (use
+- [x] All tests pass.
+- [x] No real file written outside `tmp_path`.
+- [x] `SCUFRIS_TELEMETRY` is restored to its pre-test value (use
       `monkeypatch.setenv/delenv`, never raw `os.environ` mutation).
+
+## Post-hoc notes
+
+- Landed as `tests/test_telemetry.py` (37 tests, ~0.4s).
+- `_LOG_DIR` and `_LOG_PATH` are module-level constants — patch BOTH
+  via `monkeypatch.setattr(telemetry, "_LOG_PATH", tmp_path / ...)`.
+  Patching only one leaves a real `logs/` dir as a side effect.
+- The "swallows write errors" case is exercised by pointing `_LOG_DIR`
+  at a path whose parent is a regular file (forces `mkdir` to fail) —
+  no need for OS-level read-only fixtures.
 
 ## Dependencies
 

@@ -1,6 +1,6 @@
 # Unit tests — utils/stats.py (formatters + table render)
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 16
 - TAGS: testing,quality
 
@@ -46,9 +46,23 @@ Use a `FakeHistoryManager` exposing only `get_stats()` and
 
 ## Acceptance criteria
 
-- [ ] No real clock dependencies (everything takes `now=`).
-- [ ] Separator-width regression: an agent with a longer model name
+- [x] No real clock dependencies (everything takes `now=`).
+- [x] Separator-width regression: an agent with a longer model name
       than the header must shift the separator accordingly.
+
+## Post-hoc notes
+
+- Landed as `tests/test_stats.py` (27 tests, ~0.4s).
+- `format_stats_lines` builds the header with `fmt_row(...).rstrip()`
+  but the separator with full padding, so `len(header) != len(sep)`
+  even when columns align. Don't assert exact equality — assert
+  separator widens with longer model names instead.
+- Both `format_relative` and `format_uptime` still call
+  `datetime.utcnow()` as a fallback (`stats.py:17` and `:36`); tests
+  bypass by always passing `now=`. The deprecation warnings under
+  pytest come from this fallback being touched indirectly via
+  `format_stats_lines` callbacks — see `tasks/20260509-195010` for
+  the cleanup task.
 
 ## Dependencies
 
