@@ -24,6 +24,7 @@ from telegram import Update
 
 from .logging import truncate_log
 from .telegram import TelegramTransport
+from . import telemetry
 
 # Display names used to render technical tool/agent identifiers in the
 # user-facing thinking trail. Falls back to Title Case if missing.
@@ -385,6 +386,19 @@ class ToolCallbackHandler(BaseCallbackHandler):
             )
         )
 
+        # Telemetry: stash sizes for sub-agent calls so on_tool_end /
+        # on_tool_error can compute duration and emit a JSONL record.
+        # We compute char-count proxies here because input_str is not
+        # available in on_tool_end. No-op when telemetry is disabled —
+        # but we always stash so toggling SCUFRIS_TELEMETRY mid-run
+        # doesn't desync.
+        if is_sub_agent(name):
+            info.extra["query_chars"] = len(arg) if isinstance(arg, str) else 0
+            info.extra["context_chars"] = (
+                len(context) if isinstance(context, str) else 0
+            )
+            info.extra["parent_agent"] = self._enclosing_tool_name(parent_run_id)
+
     def on_tool_end(
         self,
         output: ToolMessage,
@@ -414,6 +428,18 @@ class ToolCallbackHandler(BaseCallbackHandler):
         self.logger.debug(f"{prefix}  output: {truncate_log(output_content, 500)}")
         self._maybe_log_memory(info)
 
+        # Telemetry: emit a sub-agent event if we stashed sizes at start.
+        if "query_chars" in info.extra:
+            outcome = "refused" if telemetry.is_refusal(output_content) else "ok"
+            telemetry.log_sub_agent_event(
+                child_agent=info.name,
+                query_chars=info.extra["query_chars"],
+                context_chars=info.extra["context_chars"],
+                outcome=outcome,
+                duration_ms=int(duration * 1000),
+                parent_agent=info.extra.get("parent_agent", "scufris"),
+            )
+
     def on_tool_error(
         self,
         error: BaseException,
@@ -431,6 +457,17 @@ class ToolCallbackHandler(BaseCallbackHandler):
             f"{prefix}[bold red]tool[/bold red] [bold]{name}[/bold] "
             f"failed | [yellow]{duration:.2f}s[/yellow] | {error}"
         )
+
+        # Telemetry: emit an "error" outcome if we have stashed sizes.
+        if info is not None and "query_chars" in info.extra:
+            telemetry.log_sub_agent_event(
+                child_agent=info.name,
+                query_chars=info.extra["query_chars"],
+                context_chars=info.extra["context_chars"],
+                outcome="error",
+                duration_ms=int(duration * 1000),
+                parent_agent=info.extra.get("parent_agent", "scufris"),
+            )
 
     # ------------------------------------------------------------------
     # LLM / chat-model callbacks

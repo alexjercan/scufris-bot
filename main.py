@@ -22,6 +22,7 @@ from utils import (
     truncate_log,
 )
 from utils.stats import format_stats_lines
+from utils.telemetry import begin_turn
 
 logger = setup_logging(default_level=logging.INFO)
 config = load_config()
@@ -77,7 +78,8 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
         # Process the message with history
         process_start = time.time()
-        response_text = await agent_manager.process_message(messages, user_id)
+        with begin_turn(f"telegram:{user_id}"):
+            response_text = await agent_manager.process_message(messages, user_id)
         process_duration = time.time() - process_start
 
         # Add messages to history

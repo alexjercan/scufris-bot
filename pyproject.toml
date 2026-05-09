@@ -13,6 +13,7 @@ dependencies = [
     "langchain-community>=0.4.1",
     "langchain-ollama>=1.0.1",
     "opencode-ai>=0.1.0a36",
+    "pandas>=3.0.2",
     "python-dotenv>=1.2.2",
     "python-telegram-bot>=22.7",
     "requests>=2.32.0",

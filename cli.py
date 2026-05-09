@@ -32,6 +32,7 @@ from utils import (
     truncate_log,
 )
 from utils.stats import format_stats_lines
+from utils.telemetry import begin_turn
 
 # Pseudo user id used to scope history within the CLI session.
 CLI_USER_ID = 0
@@ -126,7 +127,8 @@ async def _handle_message(
         )
 
         process_start = time.time()
-        response_text = await agent_manager.process_message(messages, CLI_USER_ID)
+        with begin_turn(f"cli:{CLI_USER_ID}"):
+            response_text = await agent_manager.process_message(messages, CLI_USER_ID)
         process_duration = time.time() - process_start
 
         history_manager.add_user_message(CLI_USER_ID, user_message)
