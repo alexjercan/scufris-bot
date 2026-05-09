@@ -332,21 +332,27 @@ def create_sub_agent(
         """Process a query using the specialized sub-agent."""
         logger.debug(f"Sub-agent '{name}' processing query: {query[:100]}...")
 
-        # In langchain_core 1.x, `StructuredTool._run` no longer
-        # auto-injects `CallbackManagerForToolRun` into @tool functions
-        # (only `RunnableConfig` gets injected). However, `BaseTool.run`
-        # already patches the config it passes us with
-        # `callbacks=run_manager.get_child()` — so the callbacks already
-        # in `config["callbacks"]` are rooted at THIS tool run.
+        # IMPORTANT: do NOT forward the injected `config` to the inner
+        # `agent.invoke`. The `config` that `@tool` hands us is the
+        # OUTER caller's config — its `callbacks` point at our parent,
+        # not at us. If we pass it explicitly, `ensure_config`
+        # overwrites the patched callbacks and every inner run becomes
+        # a child of the caller (so `_enclosing_tool_name` reports
+        # "main"/"Scufris" for nested tools like `weather`).
         #
-        # That means simply forwarding `config` to the inner
-        # `agent.invoke` is enough: every run spawned inside becomes a
-        # true descendant of us, so `parent_run_id` chains work and
-        # `_enclosing_tool_name` resolves to the sub-agent (e.g.
-        # "knowledge_agent") instead of "main".
+        # Instead, rely on the contextvar that `BaseTool.run` set via
+        # `set_config_context(child_config)` just before invoking us.
+        # That `child_config` is `patch_config(config,
+        # callbacks=run_manager.get_child())` — i.e. the outer config
+        # with callbacks rerooted at THIS tool run. `ensure_config`
+        # picks it up automatically when no explicit config is passed,
+        # so every run spawned by `agent.invoke` becomes a true
+        # descendant of us, and `_enclosing_tool_name` correctly
+        # resolves to e.g. "knowledge_agent" for nested tool calls.
+        _ = config  # kept in the signature so @tool injects it (and so
+        # `BaseTool.run` activates the contextvar patch path)
         response = agent.invoke(
             {"messages": [{"role": "user", "content": query}]},
-            config=config,
         )
 
         messages = response.get("messages", [])

@@ -42,10 +42,19 @@ Available commands:
   /clear             Clear chat history for this session
   /history           Show chat history stats
   /multiline         Toggle multiline input (end with a single '.' line)
+  /thinking [full|short]
+                     Show or toggle whether the agent's thinking text is
+                     printed in full. Defaults to full; set
+                     SCUFRIS_FULL_THINKING=0 to start in short mode
+                     (240-char truncation).
   /exit, /quit       Exit the REPL (Ctrl-D on empty line also works)
 
 Anything else you type is sent to the agent.
 """
+
+# Length cap for "short" thinking text. Picked to fit a couple of wrapped
+# lines on a typical terminal without dominating the chat scrollback.
+THINKING_SHORT_LIMIT = 240
 
 
 def _setup_readline() -> None:
@@ -143,8 +152,13 @@ def _handle_command(
     history_manager,
     cmd: str,
     multiline: bool,
+    settings: dict,
 ) -> tuple[bool, bool]:
     """Handle a /slash command.
+
+    `settings` is a mutable dict shared with the rest of the REPL —
+    used here so `/thinking` can flip rendering state in place without
+    threading a callback through every layer.
 
     Returns (should_exit, new_multiline_state).
     """
@@ -182,16 +196,64 @@ def _handle_command(
         )
         return False, new_state
 
+    if cmd.startswith("/thinking"):
+        parts = cmd.split(maxsplit=1)
+        arg = parts[1].strip().lower() if len(parts) > 1 else ""
+        if arg == "full":
+            settings["full_thinking"] = True
+        elif arg in ("short", "truncate", "off"):
+            settings["full_thinking"] = False
+        elif arg == "":
+            # No arg = toggle.
+            settings["full_thinking"] = not settings.get("full_thinking", False)
+        else:
+            console.print(
+                f"[red]unknown /thinking arg:[/red] {arg}  (use 'full' or 'short')"
+            )
+            return False, multiline
+        mode = "full" if settings["full_thinking"] else "short"
+        console.print(f"[yellow]thinking mode: {mode}[/yellow]")
+        return False, multiline
+
     console.print(f"[red]unknown command:[/red] {cmd}  (try /help)")
     return False, multiline
 
 
 def main() -> None:
+    import argparse
     import logging
+    import os
 
-    # CLI is a debugging tool — surface everything by default. Overridable
-    # via the LOG_LEVEL env var.
-    logger = setup_logging(default_level=logging.DEBUG)
+    parser = argparse.ArgumentParser(
+        prog="scufris-cli",
+        description="Interactive CLI for the Scufris agent.",
+    )
+    parser.add_argument(
+        "--short-thinking",
+        action="store_true",
+        help=(
+            "Start with truncated (short) thinking output. Overrides "
+            "SCUFRIS_FULL_THINKING. Toggle live with /thinking."
+        ),
+    )
+    parser.add_argument(
+        "-q",
+        "--quiet",
+        action="store_true",
+        help=(
+            "Silence logging — only ERROR-and-above are shown. Useful "
+            "when you just want the chat output. Overrides LOG_LEVEL."
+        ),
+    )
+    args = parser.parse_args()
+
+    # CLI is a debugging tool — surface everything by default. `--quiet`
+    # bumps the floor to ERROR; LOG_LEVEL env var still wins if neither
+    # is set. `level=` overrides both env and default in setup_logging.
+    if args.quiet:
+        logger = setup_logging(level=logging.ERROR)
+    else:
+        logger = setup_logging(default_level=logging.DEBUG)
     config = load_config(require_telegram=False)
 
     history_manager = create_history_manager(config.max_history_per_user)
@@ -199,6 +261,18 @@ def main() -> None:
 
     console = Console()
     _setup_readline()
+
+    # Mutable settings shared with the slash-command handler and the
+    # thinking renderer. Default is full thinking — the CLI is a debug
+    # tool, so showing everything is the most useful baseline. CLI flag
+    # `--short-thinking` wins; otherwise SCUFRIS_FULL_THINKING=0/false/no
+    # /off starts in short mode.
+    if args.short_thinking:
+        full_thinking = False
+    else:
+        full_env = os.environ.get("SCUFRIS_FULL_THINKING", "").lower()
+        full_thinking = full_env not in ("0", "false", "no", "off")
+    settings: dict = {"full_thinking": full_thinking}
 
     # Render "thinking" events as dim chat-style messages, indented to
     # mirror the agent → sub-agent → tool nesting.
@@ -213,14 +287,18 @@ def main() -> None:
                 line += f": [grey50]{ev.arg}[/grey50]"
             console.print(line)
         elif ev.kind == "text":
-            # Truncate very long reasoning so the chat stays readable;
-            # the full text is still in the DEBUG log trace. Avoid
-            # `dim italic` — kitty+tmux renders it with a grey background.
-            snippet = truncate_log(ev.text.replace("\n", " "), 240)
-            console.print(f"{indent}[cyan]{src}[/cyan] [grey50]{snippet}[/grey50]")
+            # In `short` mode, keep the chat scannable; full text is also
+            # in the DEBUG log. In `full` mode, print everything verbatim.
+            # Avoid `dim italic` — kitty+tmux renders it with a grey bg.
+            text = ev.text.replace("\n", " ")
+            if not settings.get("full_thinking"):
+                text = truncate_log(text, THINKING_SHORT_LIMIT)
+            console.print(f"{indent}[cyan]{src}[/cyan] [grey50]{text}[/grey50]")
         else:  # tool_result — currently unused, kept for completeness
-            snippet = truncate_log(ev.text.replace("\n", " "), 240)
-            console.print(f"{indent}[grey50]↩ {snippet}[/grey50]")
+            text = ev.text.replace("\n", " ")
+            if not settings.get("full_thinking"):
+                text = truncate_log(text, THINKING_SHORT_LIMIT)
+            console.print(f"{indent}[grey50]↩ {text}[/grey50]")
 
     # Register the callback handler so we get the same depth-aware
     # tool/sub-agent/LLM trace as the Telegram bot. No transport needed.
@@ -252,7 +330,7 @@ def main() -> None:
 
             if stripped.startswith("/"):
                 should_exit, multiline = _handle_command(
-                    console, history_manager, stripped, multiline
+                    console, history_manager, stripped, multiline, settings
                 )
                 if should_exit:
                     console.print("[dim]bye![/dim]")
