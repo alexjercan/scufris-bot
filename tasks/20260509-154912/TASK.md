@@ -334,103 +334,94 @@ behaviour (which is still strictly better than today).
       direction.
 - [x] We agree on a phased rollout (1 prompts → 2 `context` arg →
       3 per-agent history → 4 tuning).
-- [ ] For each sub-agent we record an explicit memory policy (see
-      table below — needs a pass).
-- [ ] Open questions below either get answered or get logged as
-      separate spike tasks.
+- [x] For each sub-agent we record an explicit memory policy (see
+      table below).
+- [x] Open questions either decided or explicitly deferred (see
+      Decisions section).
 
-### Per-agent memory policy (draft — needs review)
+### Per-agent memory policy
 
 | Sub-agent          | Per-agent history | `context` arg | Notes |
 |--------------------|-------------------|---------------|-------|
-| `coding_agent`     | yes (small win on multi-step refactors) | yes | OpenCode itself is the heavy lifter — history mostly helps avoid re-stating the project layout each call. |
-| `knowledge_agent`  | yes (helps with "more on that", "what about X") | yes | Highest expected uplift from history continuity. |
-| `utilities_agent`  | probably no — calls are pure functions, history adds noise | yes | Reconsider if we ever add stateful utilities. |
-| `journal_agent`    | yes (strong case — multi-step daily flows) | yes | Probably wants the largest history window. |
+| `coding_agent`     | yes               | yes           | History helps avoid re-stating project layout; OpenCode does the heavy lifting. |
+| `knowledge_agent`  | yes               | yes           | Highest expected uplift from continuity ("more on that", "what about X"). |
+| `utilities_agent`  | no                | yes           | Calls are pure functions; history is just noise. Reconsider if we add stateful utilities. |
+| `journal_agent`    | yes (largest)     | yes           | Strong case — multi-step daily flows. Probably wants the largest window. |
 
-Open: do we want the policy *configurable per agent* in
-`create_sub_agent`, or just inline `if name in {...}` for now?
+Implementation note: hard-code the policy per agent in
+`create_sub_agent` for now (a simple flag like `keeps_history: bool`).
+Promote to full configurability only if we need it.
 
-## Open questions
+## Delegation-failure protocol
 
-1. **What gets stored in sub-agent history?** Just `(user-turn,
-   final-response)` pairs (cheap, lossy on internal reasoning) or the
-   full inner transcript including intermediate tool calls
-   (expensive, full fidelity)? Recommendation: full inner transcript,
-   trimmed by token budget. Discussion point.
-   - I think the recommendation is valid, this is what I would go for - in
-     terms of token budget it's a matter of what model we use, currently I am
-     using a simple qwen from ollama, but if I see that we need more powerful
-     LLMs we can switch to something larger. This part of the question might
-     stay open for a while, do not really have a token budget in mind right
-     now.
-2. **Trim policy.** Main history is message-count based. For sub-
-   agents the tool-result messages can be huge (think `daily_view_tool`
-   output). A token-based budget probably makes more sense per agent.
-   Need to pick a budget.
-   - again, a token budget is TBD for now - we can either have some kind of
-     constant or a variable to help with it in the future. I think the history
-     might get refactored at some point, would be really interesting to
-     experiment with different methods, like summarization of history, or
-     keeping a sliding window and summarizing what get outside the window...
-     something like this. I think a combination of both might work best here.
-     Maybe even somehow selectevly keeping important pieces intact in some sort
-     of hashmap, or set of "Useful information about the user" and injecting
-     them in the chat, while summarizing the rest - this could evolve into
-     another task/spike.
-3. **Token budget overall.** Per turn, what's the cap we're willing
-   to spend on (own-history + `context` + query) for a single sub-
-   agent invocation? Affects defaults for both window size and
-   `context` length cap.
-   - This can be checked as we test the bot itself, we can start with some sane
-     defaults
-4. **`/clear` semantics.** Confirmed: clears the user's main history
-   AND every per-agent history for that user. Should we surface a
-   sub-command to clear just one agent's history (e.g.
-   `/clear journal`)? Probably nice-to-have, not blocker.
-   - just to keep it simple I would clear everything, this functionality is
-     more for debugging purposes anyway.
-5. **Scope of "session".** Still only `user_id` keyed. We're not
-   introducing session IDs in this work. Sliding window + `/clear`
-   stays the lifecycle.
-6. **Privacy boundary.** F preserves the no-cross-leakage property by
-   construction: each sub-agent only ever sees its *own* history plus
-   the `context` Scufris chose to write. The `context` becomes the
-   single auditable channel for cross-domain information. Any rules
-   like "never copy journal data into knowledge's context" become
-   prompt-level rules for Scufris.
-   - honestly for me, since I will mainly be the single user this shouldn't be
-     a big concern. we can leak some information for now. we will revisit this
-     later on if we scale more or we see that data leakage produces some
-     undesired results in performance. but privacy itself isn't an issue right
-     now.
-7. **Observability.** `ThinkingEvent` needs a way to surface the
-   `context` payload (and ideally a hint of "+N prior turns from this
-   agent's history"). Either a new event kind `tool_context`, or
-   extend the existing `tool_call` event with an optional `context`
-   field. Latter is probably cleaner.
-   - which one is cleaner and simpler to develop/test/maintain honestly.
-8. **Prompt size.** `journal_agent`'s prompt is already ~150 lines.
-   Adding the `## Memory & Context` section is a few more. Worth a
-   parallel slim-down pass on that prompt; not a blocker.
-   - sure, sounds good to me
-9. **Testing.** Need a small fixture of multi-turn delegations to
-   evaluate Phase 1 prompt changes and again after Phase 2 and 3.
-   Format TBD; could be as simple as a script that replays a few
-   recorded conversations and snapshots the resulting trace.
-   - testing would be nice to have, not a blocker honetly
-10. **Tool description vs. system prompt.** With Option F, the tool
-    description for each sub-agent should explicitly document the
-    `context` arg (what to put in it, what NOT to put in it — e.g.
-    "don't repeat anything the sub-agent has already seen, that's
-    its job to remember"). Prefer rich tool descriptions over
-    bloating Scufris's main prompt.
-    - definetly, Scufris main prompt shouldn't include too much stuff about the
-      specifics of each sub agent. Scufris should be able to intuitively guess
-      which sub agent to call, and maybe the sub-agents should be like "hey IDK
-      how to do this thing, stop asking me for it" and scufris is like "oh, let
-      me ask someone else", and as a fallback it can be like "aight, can't do
-      it boss"
+Captured here because it cuts across all three options and shapes the
+Phase 1 prompts:
+
+- **Sub-agents may refuse.** If a sub-agent decides a request is
+  outside its competence (e.g. user asks `journal_agent` to do a web
+  search), it should return a short, structured refusal in its tool
+  result rather than guessing or doing the wrong thing. Suggested
+  shape: a one-line tag like `cannot_handle: <reason>` followed by
+  whatever brief context helps Scufris re-route.
+- **Scufris's fallback ladder.** On receiving a `cannot_handle`
+  result, Scufris should:
+  1. Try a more appropriate sub-agent if one exists.
+  2. If none fits, attempt the task itself if it's something it can
+     do without a tool.
+  3. If still stuck, tell the user honestly: "I can't do that right
+     now."
+- This protocol must be documented in:
+  - Each sub-agent's prompt (when and how to refuse).
+  - Scufris's main prompt (how to interpret refusals and re-route).
+
+This is a Phase 1 concern (prompt-only) and ships with the rest of
+the prompt rework.
+
+## Decisions
+
+Closed items, captured for future-self reference. The original
+discussion lives in the file history.
+
+1. **What gets stored in sub-agent history.** Full inner transcript
+   (intermediate tool calls included), trimmed by token budget.
+2. **Trim policy.** Token-budget based, not message-count. Exact
+   budget TBD (see Deferred). The current sliding-window approach is
+   considered a starting point only — the strategy is expected to
+   evolve (see *History compaction spike* in spin-offs).
+3. **`/clear` semantics.** Wipes the user's main history AND every
+   per-agent history for that user. No per-agent clear sub-command —
+   keep it simple, this is a debugging tool.
+4. **Privacy / cross-leakage.** Not a concern at current scale
+   (single user). The Option F architecture preserves the no-leakage
+   property by construction anyway, but we won't hand-craft prompt
+   rules to enforce it. Revisit if usage scales or we observe quality
+   regressions from leakage.
+5. **Observability.** Extend the existing `ThinkingEvent` `tool_call`
+   variant with an optional `context` field. Simpler to plumb, fewer
+   moving parts than introducing a new event kind. Optionally add a
+   small `+N prior turns` hint as a separate field once Phase 3 lands.
+6. **Prompt slim-down on `journal_agent`.** Yes, run a parallel
+   refactor pass during Phase 1.
+7. **Testing.** Nice to have, not a blocker. Phase 4 task.
+8. **Tool description vs. main prompt.** All sub-agent specifics
+   (including how to fill `context`) live in the per-agent tool
+   description. Scufris's main prompt stays high-level and intuitive
+   ("pick the right agent based on the request; trust their refusals
+   when they happen").
+
+## Deferred (genuinely TBD)
+
+These don't block any phase — pick sane defaults to start, tune from
+real usage:
+
+- **Token budget per sub-agent invocation.** Cap on
+  (own-history + `context` + query). Will depend on the model
+  (currently small Qwen via Ollama). Start with sane defaults
+  (suggest: ~4k tokens per-agent history, ~500 token `context` cap),
+  tune later.
+- **Per-agent history window size.** Same as above. Start with
+  uniform defaults, special-case `journal_agent` if it bumps the cap.
+
 
 ## Non-goals (for now)
 
