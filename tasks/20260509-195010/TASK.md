@@ -1,6 +1,6 @@
 # Replace datetime.utcnow() with timezone-aware now(UTC) in history.py
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 5
 - TAGS: chore,deprecation,history
 
@@ -41,15 +41,34 @@ Replace with a timezone-aware UTC datetime:
 
 ## Acceptance criteria
 
-- [ ] `utils/history.py` no longer calls `datetime.utcnow()`.
-- [ ] `pytest tests/` produces zero `DeprecationWarning`s related to
+- [x] `utils/history.py` no longer calls `datetime.utcnow()`.
+- [x] `pytest tests/` produces zero `DeprecationWarning`s related to
       `utcnow`.
-- [ ] No behaviour change in `/stats` rendering — `format_relative`
+- [x] No behaviour change in `/stats` rendering — `format_relative`
       in `utils/stats.py` still computes the right delta. (If it
       does naive subtraction, this task expands to either making
       that subtraction tz-aware or stripping tz at read time. Check
       first; small fix either way.)
-- [ ] Existing tests still pass.
+- [x] Existing tests still pass.
+
+## Post-hoc notes
+
+- Sweep ended up touching 5 sites, not 3: also `main.py:33`
+  (`session_started_at`) and `cli.py:287` (`settings["started_at"]`).
+  Both had to flip together — making `format_uptime`'s default
+  tz-aware while `started_at` stayed naive would break the
+  subtraction.
+- `tests/test_stats.py` had a module-level `NOW = datetime(2026, 5, 9,
+  12, 0, 0)` (naive) which fed `last_activity` cells in fake
+  telemetry dicts. Once the production default went tz-aware, those
+  cells subtracted naive↔aware and 8 tests crashed. Fixed by adding
+  `tzinfo=timezone.utc` to `NOW`. Tests that pass `now=NOW`
+  explicitly stayed naive↔naive, but the in-table `format_relative`
+  call inside `format_stats_lines` doesn't forward `now`, so it
+  always hits the default.
+- Verified zero `utcnow` DeprecationWarnings under `pytest`; ruff
+  clean; mypy unchanged (the 21 pre-existing errors are tracked in
+  `tasks/20260509-200454`).
 
 ## Out of scope
 
