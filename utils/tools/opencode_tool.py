@@ -1,51 +1,65 @@
-"""OpenCode tool for the agent to perform coding tasks."""
+"""OpenCode tool for the agent to perform coding tasks.
+
+Connects to a locally-running OpenCode server (default
+``http://localhost:4096``). Modernised to the `@tool` decorator
+(was a legacy single-input `Tool(...)` — see
+``tasks/20260509-165118`` for the sweep).
+"""
 
 import logging
 
-from langchain_core.tools import Tool
+from langchain.tools import tool
 from opencode_ai import APIConnectionError, Opencode
 
 logger = logging.getLogger("scufris-bot.tools.opencode")
 
+OPENCODE_BASE_URL = "http://localhost:4096"
+DEFAULT_PROVIDER_ID = "github-copilot"
+DEFAULT_MODEL_ID = "claude-sonnet-4.5"
 
-def run_opencode_task(task: str) -> str:
-    """Run an OpenCode task and return the result.
 
-    This tool connects to a running OpenCode server and executes coding tasks.
+@tool("opencode")
+def opencode_tool(task: str) -> str:
+    """Run a coding task via the OpenCode AI server.
+
+    Use this when you need to generate code, modify files, or perform
+    technical tasks that require deep code understanding (writing,
+    debugging, refactoring, codebase analysis, file edits).
+
+    Examples: "Create a Python function to calculate fibonacci numbers",
+    "Fix the bug in utils/config.py where the file path is not resolved
+    correctly", "Add type hints to all functions in main.py".
+
+    Note: requires the OpenCode server to be running locally on
+    ``http://localhost:4096``. If unreachable, returns a clear error
+    explaining how to start it.
 
     Args:
-        task: The coding task or instruction for OpenCode to execute
+        task: A clear instruction describing the coding task to perform.
 
     Returns:
-        The result/output from OpenCode
+        The text output from OpenCode, or a human-readable error message.
     """
     try:
         logger.info(f"Running OpenCode task: {task[:100]}...")
 
-        # Create OpenCode client (connects to localhost:4096 by default)
-        client = Opencode(base_url="http://localhost:4096")
+        client = Opencode(base_url=OPENCODE_BASE_URL)
 
-        # Create a new session (need to pass extra_body={} to avoid "Malformed JSON" error)
+        # The Python SDK requires extra_body={} on session.create to
+        # avoid a "Malformed JSON" server-side error.
         session = client.session.create(extra_body={})
         session_id = session.id
         logger.debug(f"Created session: {session_id}")
 
-        # Get default provider and model from config
-        # For now, we'll use anthropic/claude-sonnet-4 as default
-        # You can make this configurable via environment variables
-        provider_id = "github-copilot"
-        model_id = "claude-sonnet-4.5"
-
-        # Send the task to OpenCode
         response = client.session.chat(
             id=session_id,
-            provider_id=provider_id,
-            model_id=model_id,
+            provider_id=DEFAULT_PROVIDER_ID,
+            model_id=DEFAULT_MODEL_ID,
             parts=[{"type": "text", "text": task}],
             system="You are a helpful coding assistant. Provide clear, concise responses.",
         )
 
-        # Extract the response content
+        # Response shape varies across SDK versions; try common fields.
         response_text = ""
         if hasattr(response, "parts"):
             for part in response.parts:
@@ -58,7 +72,6 @@ def run_opencode_task(task: str) -> str:
 
         logger.info(f"OpenCode task completed ({len(response_text)} chars)")
 
-        # Clean up session
         try:
             client.session.delete(session_id)
             logger.debug(f"Deleted session: {session_id}")
@@ -85,7 +98,6 @@ def run_opencode_task(task: str) -> str:
         logger.error(f"OpenCode task error: {e}")
         error_msg = str(e)
 
-        # Provide helpful error messages based on error type
         if "authentication" in error_msg.lower() or "api key" in error_msg.lower():
             return (
                 f"❌ Authentication error: {error_msg}\n\n"
@@ -94,26 +106,7 @@ def run_opencode_task(task: str) -> str:
                 "2. Add your API keys\n"
                 "3. Try again"
             )
-        else:
-            return (
-                f"❌ Error running OpenCode task: {error_msg}\n\n"
-                "Make sure OpenCode server is running and properly configured."
-            )
-
-
-# Create the OpenCode tool
-opencode_tool = Tool(
-    name="opencode",
-    description=(
-        "Use OpenCode AI to perform complex coding tasks like writing code, "
-        "debugging, refactoring, analyzing codebases, or making file changes. "
-        "This is useful when you need to generate code, modify files, or perform "
-        "technical tasks that require deep code understanding. "
-        "Input should be a clear instruction describing the coding task to perform. "
-        "Examples: 'Create a new Python function to calculate fibonacci numbers', "
-        "'Fix the bug in utils/config.py where the file path is not resolved correctly', "
-        "'Add type hints to all functions in main.py'. "
-        "Note: Requires OpenCode server to be running."
-    ),
-    func=run_opencode_task,
-)
+        return (
+            f"❌ Error running OpenCode task: {error_msg}\n\n"
+            "Make sure OpenCode server is running and properly configured."
+        )

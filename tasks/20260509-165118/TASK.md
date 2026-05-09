@@ -1,6 +1,6 @@
 # Fix weather_tool: convert to @tool, support forecast horizon
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 60
 - TAGS: bug,tools,weather
 
@@ -114,16 +114,16 @@ became visible.
 
 ## Acceptance criteria
 
-- [ ] `weather_tool` is built with `@tool`; introspecting its
+- [x] `weather_tool` is built with `@tool`; introspecting its
       `args` shows both `location` and `forecast_days`.
-- [ ] Reproducer query ("what is the weather like in Ploiesti?")
+- [x] Reproducer query ("what is the weather like in Ploiesti?")
       completes successfully end-to-end with no exception.
-- [ ] Calling with `forecast_days >= 1` returns a response that
+- [x] Calling with `forecast_days >= 1` returns a response that
       includes both current conditions and per-day forecast lines.
-- [ ] Calling with `forecast_days = 0` (or omitted) returns the
+- [x] Calling with `forecast_days = 0` (or omitted) returns the
       same shape of response as today (back-compat for the common
       "weather in X" path).
-- [ ] Tool description in the registry mentions the forecast
+- [x] Tool description in the registry mentions the forecast
       capability.
 
 ## Out of scope
@@ -143,3 +143,57 @@ became visible.
   list).
 - Surfacing context (the trace that exposed the bug): see the Phase 2
   smoke test conversation in the session log of 2026-05-09.
+
+## Implementation notes (post-hoc)
+
+User expanded scope mid-task: "fix all tools that are not using
+`@tool`". Three tools were on the legacy `Tool(name=..., func=...)`
+constructor; all converted in this session:
+
+- `utils/tools/weather_tool.py` — bug fix + multi-arg schema
+  (`location: str`, `forecast_days: int = 0`). Forecast block built
+  from the `data["weather"]` array that wttr.in already returned but
+  the old code ignored. Per-day line picks the noon-ish hourly slot
+  (index 4 of 8) for the `weatherDesc`. Defensive
+  `max(0, min(int(forecast_days or 0), 3))` clamp at the top of the
+  function — never trust the LLM to respect "1–3".
+- `utils/tools/web_search.py` — pure modernisation. Behaviour
+  unchanged (single `query: str` arg, same DDG path, same
+  `📚 References:` block).
+- `utils/tools/opencode_tool.py` — pure modernisation. Behaviour
+  unchanged. Lifted three magic constants to module-level
+  (`OPENCODE_BASE_URL`, `DEFAULT_PROVIDER_ID`, `DEFAULT_MODEL_ID`)
+  while in there.
+
+### `@tool("name")` pattern
+
+LangChain's `@tool` defaults the runtime tool name to the function
+name. The existing call sites and prompts reference `weather`,
+`web_search`, `opencode` (no `_tool` suffix), so I used the
+`@tool("explicit_name")` form to override while keeping the export
+symbol `*_tool` (matches what `agent_builder.py` and
+`utils/tools/__init__.py` import). Prevents a sprawling rename.
+
+### Tested
+
+- `weather_tool.invoke({"location": "Ploiesti", "forecast_days": 3})`
+  — original failing reproducer — now returns current + 3-day
+  forecast with no exception.
+- `weather_tool.invoke({"location": "Paris"})` — back-compat,
+  no `Forecast:` block in output.
+- Schemas verified: `weather.args = {forecast_days, location}`,
+  `web_search.args = {query}`, `opencode.args = {task}`.
+- `python -c "import main"` — full agent hierarchy still wires up.
+
+`opencode_tool` was **not** invoked live (requires running
+`opencode serve`); only its schema and import were verified.
+
+### What was *not* done
+
+- No mocked `requests.get` integration test (the live wttr.in
+  call works and is reliable enough; the task notes this as
+  "nice-to-have, only if cheap" — and it would mean adding a
+  test-infra dependency we don't otherwise have yet).
+- Did not file a separate task for the `web_search` /
+  `opencode` conversions — they were trivial and folded into
+  this task per user request.
