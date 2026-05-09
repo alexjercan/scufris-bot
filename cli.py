@@ -19,6 +19,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 
 from utils import (
+    ThinkingEvent,
     ToolCallbackHandler,
     create_agent_manager,
     create_history_manager,
@@ -193,13 +194,32 @@ def main() -> None:
 
     history_manager = create_history_manager(config.max_history_per_user)
     main_agent = setup_scufris(config=config)
-    # Register the callback handler so we get the same depth-aware
-    # tool/sub-agent/LLM trace as the Telegram bot. No transport needed.
-    callback_handler = ToolCallbackHandler()
-    agent_manager = create_agent_manager(agent=main_agent, callbacks=[callback_handler])
 
     console = Console()
     _setup_readline()
+
+    # Render "thinking" events as dim chat-style messages, indented to
+    # mirror the agent → sub-agent → tool nesting.
+    def render_thinking(ev: ThinkingEvent) -> None:
+        indent = "  " * ev.depth
+        if ev.kind == "tool_call":
+            console.print(
+                f"[dim]{indent}→ [cyan]{ev.source}[/cyan] calls "
+                f"[bold]{ev.text}[/bold][/dim]"
+            )
+        elif ev.kind == "text":
+            # Truncate very long reasoning so the chat stays readable;
+            # the full text is still in the DEBUG log trace.
+            snippet = truncate_log(ev.text.replace("\n", " "), 240)
+            console.print(f"[dim italic]{indent}{ev.source}: {snippet}[/dim italic]")
+        else:  # tool_result — currently unused, kept for completeness
+            snippet = truncate_log(ev.text.replace("\n", " "), 240)
+            console.print(f"[dim]{indent}↩ {snippet}[/dim]")
+
+    # Register the callback handler so we get the same depth-aware
+    # tool/sub-agent/LLM trace as the Telegram bot. No transport needed.
+    callback_handler = ToolCallbackHandler(on_thinking=render_thinking)
+    agent_manager = create_agent_manager(agent=main_agent, callbacks=[callback_handler])
 
     console.print(
         "[bold]Scufris CLI[/bold] — type [bold]/help[/bold] for commands, "

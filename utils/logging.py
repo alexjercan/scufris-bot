@@ -71,6 +71,7 @@ def setup_logging(
                 tracebacks_show_locals=True,
                 show_time=True,
                 show_path=True,
+                markup=True,
             )
         ],
     )

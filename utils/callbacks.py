@@ -12,7 +12,7 @@ import logging
 import resource
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Literal, Optional
 from uuid import UUID
 
 from langchain_core.callbacks import BaseCallbackHandler
@@ -32,7 +32,26 @@ class _RunInfo:
     name: str
     start: float
     depth: int
+    parent_run_id: Optional[UUID] = None
     extra: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ThinkingEvent:
+    """A user-visible "thinking" event emitted by the callback handler.
+
+    The CLI renders these as dim chat-style messages above the final
+    assistant reply. The Telegram bot ignores them by default.
+    """
+
+    kind: Literal["text", "tool_call", "tool_result"]
+    source: str  # e.g. "main", "knowledge_agent"
+    text: str  # message to display
+    depth: int  # nesting level (for indentation/styling)
+
+
+# Type alias for the on_thinking callback.
+ThinkingCallback = Callable[[ThinkingEvent], None]
 
 
 def _peak_rss_kb() -> int:
@@ -62,10 +81,12 @@ class ToolCallbackHandler(BaseCallbackHandler):
         self,
         telegram_transport: Optional[TelegramTransport] = None,
         update: Optional[Update] = None,
+        on_thinking: Optional[ThinkingCallback] = None,
     ):
         super().__init__()
         self.telegram_transport = telegram_transport
         self.update = update
+        self.on_thinking = on_thinking
         self.logger = logging.getLogger("scufris-bot.agent.tools")
 
         # run_id -> _RunInfo
@@ -107,12 +128,42 @@ class ToolCallbackHandler(BaseCallbackHandler):
             name=name,
             start=time.time(),
             depth=self._depth_for(parent_run_id),
+            parent_run_id=parent_run_id,
         )
         self._runs[run_id] = info
         return info
 
     def _pop(self, run_id: UUID) -> Optional[_RunInfo]:
         return self._runs.pop(run_id, None)
+
+    def _enclosing_tool_name(self, parent_run_id: Optional[UUID]) -> str:
+        """Walk up the parent chain to find the nearest enclosing tool.
+
+        Returns the tool's name (e.g. "knowledge_agent") or "main" if no
+        tool ancestor exists. Used to label thinking events so the user
+        knows which agent is talking.
+        """
+        rid = parent_run_id
+        # Cap the walk to avoid pathological loops.
+        for _ in range(32):
+            if rid is None:
+                return "main"
+            info = self._runs.get(rid)
+            if info is None:
+                return "main"
+            if info.kind == "tool":
+                return info.name
+            rid = info.parent_run_id
+        return "main"
+
+    def _emit(self, event: ThinkingEvent) -> None:
+        """Send a thinking event to the optional listener (best-effort)."""
+        if self.on_thinking is None:
+            return
+        try:
+            self.on_thinking(event)
+        except Exception:  # pragma: no cover — never break the agent
+            self.logger.exception("on_thinking callback raised")
 
     def _maybe_log_memory(self, info: _RunInfo) -> None:
         """Log peak RSS once per top-level run."""
@@ -146,6 +197,17 @@ class ToolCallbackHandler(BaseCallbackHandler):
             f"start | in={len(input_str)}c"
         )
         self.logger.debug(f"{prefix}  input: {truncate_log(input_str, 500)}")
+
+        # Surface a short "calling X" line to the user-facing channel.
+        preview = truncate_log(input_str.strip(), 80)
+        self._emit(
+            ThinkingEvent(
+                kind="tool_call",
+                source=self._enclosing_tool_name(parent_run_id),
+                text=f"{name}({preview})" if preview else name,
+                depth=info.depth,
+            )
+        )
 
     def on_tool_end(
         self,
@@ -293,6 +355,71 @@ class ToolCallbackHandler(BaseCallbackHandler):
             f"{prefix}[magenta]llm[/magenta] {info.name} done | "
             f"[yellow]{duration:.2f}s[/yellow]{tokens_str}"
         )
+
+        # Extract the model's natural-language reasoning (if any) and
+        # surface it as a "thinking" text event. We pull from the first
+        # generation's AIMessage and look at both .content and the
+        # reasoning_content extension that Ollama emits when reasoning
+        # mode is on.
+        thinking_text = self._extract_thinking_text(response)
+        if thinking_text:
+            # The LLM run we just popped was for THIS source — its parent
+            # tool (if any) is the sub-agent the model belongs to.
+            source = self._enclosing_tool_name(info.parent_run_id)
+            self._emit(
+                ThinkingEvent(
+                    kind="text",
+                    source=source,
+                    text=thinking_text,
+                    depth=info.depth,
+                )
+            )
+
+    @staticmethod
+    def _extract_thinking_text(response: LLMResult) -> str:
+        """Pull the model's reasoning text from an LLMResult, if any.
+
+        Looks at:
+          - ``AIMessage.content`` (string or list of parts)
+          - ``AIMessage.additional_kwargs['reasoning_content']`` (Ollama)
+
+        Returns an empty string if there's nothing useful to show. We
+        deliberately keep this generous about what counts as "text" —
+        the CLI is the one that decides whether to render it.
+        """
+        for gen_list in response.generations:
+            for gen in gen_list:
+                msg = getattr(gen, "message", None)
+                if msg is None:
+                    continue
+
+                pieces: List[str] = []
+
+                # 1. Reasoning content (Ollama, when reasoning=True)
+                add_kwargs = getattr(msg, "additional_kwargs", None) or {}
+                reasoning = add_kwargs.get("reasoning_content") or add_kwargs.get(
+                    "reasoning"
+                )
+                if isinstance(reasoning, str) and reasoning.strip():
+                    pieces.append(reasoning.strip())
+
+                # 2. Regular content
+                content = getattr(msg, "content", None)
+                if isinstance(content, str) and content.strip():
+                    pieces.append(content.strip())
+                elif isinstance(content, list):
+                    # Some providers return a list of {type, text} parts.
+                    for part in content:
+                        if isinstance(part, dict):
+                            text = part.get("text") or part.get("reasoning")
+                            if isinstance(text, str) and text.strip():
+                                pieces.append(text.strip())
+                        elif isinstance(part, str) and part.strip():
+                            pieces.append(part.strip())
+
+                if pieces:
+                    return "\n".join(pieces)
+        return ""
 
     def on_llm_error(
         self,
