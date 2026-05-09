@@ -34,13 +34,18 @@ class AgentManager:
         self.callbacks = callbacks
         self.logger.info(f"Loaded {len(self.callbacks)} callback handler(s)")
 
-    async def process_message(self, messages: List[Dict[str, str]]) -> str:
+    async def process_message(
+        self, messages: List[Dict[str, str]], user_id: int
+    ) -> str:
         """
         Process messages through the agent and return the response.
 
         Args:
             messages: List of message dictionaries with 'role' and 'content' keys
                      This includes the conversation history plus the new message
+            user_id: Caller's user ID. Threaded into ``configurable`` so
+                sub-agent tools can load the right per-(user, agent)
+                history slice. See Phase 3.2 / Phase 3.3.
 
         Returns:
             The agent's response text
@@ -48,12 +53,17 @@ class AgentManager:
         Raises:
             ValueError: If no response is received from the agent
         """
-        self.logger.debug(f"Processing {len(messages)} messages")
+        self.logger.debug(f"Processing {len(messages)} messages for user {user_id}")
 
-        # Invoke the agent with callbacks
+        # Invoke the agent with callbacks. ``configurable.user_id`` is
+        # propagated by LangChain to every nested runnable, including
+        # sub-agent tools that need it to key their history.
         response = self.agent.invoke(
             {"messages": messages},
-            config={"callbacks": self.callbacks},
+            config={
+                "callbacks": self.callbacks,
+                "configurable": {"user_id": user_id},
+            },
         )
 
         response_text = self._extract_response_text(response)

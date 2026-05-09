@@ -27,7 +27,7 @@ telegram_transport = TelegramTransport(config.allowed_user_ids)
 history_manager = create_history_manager(config.max_history_per_user)
 
 # Setup the agent hierarchy
-main_agent = setup_scufris(config=config)
+main_agent = setup_scufris(config=config, history_manager=history_manager)
 
 # Create callback handler and agent manager
 callback_handler = ToolCallbackHandler(telegram_transport)
@@ -71,7 +71,7 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
         # Process the message with history
         process_start = time.time()
-        response_text = await agent_manager.process_message(messages)
+        response_text = await agent_manager.process_message(messages, user_id)
         process_duration = time.time() - process_start
 
         # Add messages to history
@@ -109,16 +109,22 @@ async def clear_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     user_info = telegram_transport.get_user_info(update)
     user_id = user_info["id"]
 
-    message_count = history_manager.get_message_count(user_id)
-    history_manager.clear_history(user_id)
+    breakdown = history_manager.get_user_breakdown(user_id)
+    total = history_manager.clear_history(user_id)
 
     logger.info(
-        f"Cleared {message_count} messages for user {user_info['username']} (ID:{user_id})"
+        f"Cleared {total} messages for user {user_info['username']} (ID:{user_id})"
     )
 
-    await update.message.reply_text(
-        f"🗑️ Cleared {message_count} messages from your chat history."
-    )
+    if total == 0:
+        msg = "🗑️ No messages to clear."
+    elif breakdown:
+        parts = ", ".join(f"{a}: {n}" for a, n in sorted(breakdown.items()))
+        msg = f"🗑️ Cleared {total} messages ({parts})."
+    else:
+        msg = f"🗑️ Cleared {total} messages from your chat history."
+
+    await update.message.reply_text(msg)
 
 
 @restricted(config.allowed_user_ids)
@@ -141,6 +147,33 @@ async def history_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await update.message.reply_text(stats_text)
 
 
+@restricted(config.allowed_user_ids)
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show per-agent memory breakdown for the user."""
+    user_info = telegram_transport.get_user_info(update)
+    user_id = user_info["id"]
+
+    breakdown = history_manager.get_user_breakdown(user_id)
+    stats = history_manager.get_stats()
+
+    lines = [
+        "📊 Scufris Stats",
+        "",
+        f"Total users: {stats['total_users']}",
+        f"Total messages: {stats['total_messages']}",
+        f"Max per user: {stats['max_history_per_user']}",
+        "",
+        "Per-agent (your slices):",
+    ]
+    if breakdown:
+        for agent, count in sorted(breakdown.items()):
+            lines.append(f"  {agent}: {count}")
+    else:
+        lines.append("  (no messages yet)")
+
+    await update.message.reply_text("\n".join(lines))
+
+
 def main():
     logger.info("Starting Scufris Bot...")
 
@@ -149,6 +182,7 @@ def main():
     logger.info("Registering command handlers")
     app.add_handler(CommandHandler("clear", clear_history))
     app.add_handler(CommandHandler("history", history_stats))
+    app.add_handler(CommandHandler("stats", stats_command))
 
     logger.info("Registering message handlers")
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))

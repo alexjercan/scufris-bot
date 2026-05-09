@@ -5,11 +5,13 @@ from typing import List, Optional
 
 from langchain.agents import create_agent
 from langchain_core.callbacks import BaseCallbackHandler
+from langchain_core.messages import HumanMessage
 from langchain_core.runnables import Runnable, RunnableConfig
 from langchain_core.tools import BaseTool, tool
 from langchain_ollama import ChatOllama
 
 from .config import Config
+from .history import ChatHistoryManager
 from .tools import (
     calculator_tool,
     daily_view_tool,
@@ -307,6 +309,10 @@ def create_sub_agent(
     tools: List[BaseTool],
     logger: logging.Logger,
     tool_description: Optional[str] = None,
+    *,
+    keeps_history: bool = False,
+    history_token_budget: int = 4000,
+    history_manager: Optional[ChatHistoryManager] = None,
 ) -> BaseTool:
     """
     Create a sub-agent as a tool that can be used by the main agent.
@@ -321,10 +327,26 @@ def create_sub_agent(
             which sub-agent to delegate to. Should also tell the main agent
             how to phrase the `query` for this sub-agent. If omitted, falls
             back to a generic blurb.
+        keeps_history: If True, this sub-agent loads/persists its own
+            per-(user, agent) history slice via ``history_manager``. The
+            tool then requires ``configurable.user_id`` to be set on the
+            invocation config (Phase 3.2). If False (default), the
+            sub-agent is stateless across calls — same as Phase 2.
+        history_token_budget: Soft cap on the per-agent slice size,
+            measured in chars/4 tokens. Only used when
+            ``keeps_history=True``.
+        history_manager: Shared :class:`ChatHistoryManager` instance.
+            Required when ``keeps_history=True``.
 
     Returns:
         A tool that wraps the sub-agent
     """
+    if keeps_history and history_manager is None:
+        raise ValueError(
+            f"create_sub_agent({name!r}): keeps_history=True requires a "
+            "history_manager instance."
+        )
+
     # Create the LLM for the sub-agent
     llm = ChatOllama(
         model=config.ollama_model,
@@ -348,6 +370,29 @@ def create_sub_agent(
             f"Sub-agent '{name}' query={query[:80]!r} context={context[:80]!r}"
         )
 
+        # ---- Load prior history (Phase 3.3) ----
+        # When keeps_history=True we look up the per-(user, agent) slice
+        # so this call sees its own previous turns. user_id arrives via
+        # configurable (Phase 3.2). Missing user_id is a programmer
+        # error in the wiring — fail loudly.
+        prior: List = []
+        user_id: Optional[int] = None
+        if keeps_history:
+            user_id = (config.get("configurable") or {}).get("user_id")
+            if user_id is None:
+                raise ValueError(
+                    f"sub_agent_tool[{name}]: configurable.user_id is "
+                    "missing — check AgentManager.process_message wiring "
+                    "(Phase 3.2)."
+                )
+            assert history_manager is not None  # narrowed by keeps_history
+            prior = history_manager.get_history(user_id, agent=name)
+            if prior:
+                logger.debug(
+                    f"Sub-agent '{name}' loaded {len(prior)} prior message(s) "
+                    f"for user {user_id}"
+                )
+
         # Compose the user message: optional context, separator, query.
         # Keeping the separator visually distinct so the LLM treats the
         # two halves as separate chunks (see `SUB_AGENT_MEMORY_CONTEXT`
@@ -358,6 +403,9 @@ def create_sub_agent(
             user_content = f"{context.strip()}\n\n---\n\n{query}"
         else:
             user_content = query
+
+        user_turn = HumanMessage(content=user_content)
+        input_messages = [*prior, user_turn]
 
         # IMPORTANT: do NOT forward the injected `config` to the inner
         # `agent.invoke`. The `config` that `@tool` hands us is the
@@ -376,17 +424,28 @@ def create_sub_agent(
         # so every run spawned by `agent.invoke` becomes a true
         # descendant of us, and `_enclosing_tool_name` correctly
         # resolves to e.g. "knowledge_agent" for nested tool calls.
-        _ = config  # kept in the signature so @tool injects it (and so
-        # `BaseTool.run` activates the contextvar patch path)
-        response = agent.invoke(
-            {"messages": [{"role": "user", "content": user_content}]},
-        )
+        response = agent.invoke({"messages": input_messages})
 
-        messages = response.get("messages", [])
-        if not messages:
+        all_messages = response.get("messages", [])
+        if not all_messages:
             return "Error: No response from sub-agent"
 
-        last_message = messages[-1]
+        # ---- Persist new messages back to the slice (Phase 3.3) ----
+        # `all_messages` = [*input_messages, *new_messages]. We persist
+        # the user_turn plus everything the inner agent generated (AI
+        # responses + tool calls + tool results) so the next call sees
+        # the full inner transcript per the master design doc.
+        if keeps_history:
+            assert user_id is not None and history_manager is not None
+            new_messages = all_messages[len(input_messages) :]
+            history_manager.add_messages(
+                user_id,
+                agent=name,
+                messages=[user_turn, *new_messages],
+                token_budget=history_token_budget,
+            )
+
+        last_message = all_messages[-1]
         response_text = (
             last_message.content
             if hasattr(last_message, "content")
@@ -405,7 +464,12 @@ def create_sub_agent(
         "Pass a self-contained `query` string describing what you need."
     )
 
-    logger.info(f"Created sub-agent: {name} with {len(tools)} tools")
+    logger.info(
+        f"Created sub-agent: {name} with {len(tools)} tools "
+        f"(keeps_history={keeps_history}"
+        + (f", token_budget={history_token_budget}" if keeps_history else "")
+        + ")"
+    )
 
     return sub_agent_tool
 
@@ -413,6 +477,7 @@ def create_sub_agent(
 def create_coding_agent(
     config: Config,
     logger: logging.Logger,
+    history_manager: ChatHistoryManager,
 ) -> BaseTool:
     """
     Create the coding sub-agent.
@@ -420,6 +485,8 @@ def create_coding_agent(
     Args:
         config: Configuration object
         logger: Logger instance
+        history_manager: Shared chat history manager (used for the
+            sub-agent's per-(user, agent) memory slice)
 
     Returns:
         Coding agent as a tool
@@ -431,6 +498,9 @@ def create_coding_agent(
         system_prompt=CODING_AGENT_PROMPT,
         tools=tools,
         logger=logger,
+        keeps_history=True,
+        history_token_budget=4000,
+        history_manager=history_manager,
         tool_description=(
             "Delegate coding tasks: writing, debugging, refactoring, file "
             "edits, or explaining code. Pass the **task** in `query` "
@@ -448,6 +518,7 @@ def create_coding_agent(
 def create_knowledge_agent(
     config: Config,
     logger: logging.Logger,
+    history_manager: ChatHistoryManager,
 ) -> BaseTool:
     """
     Create the knowledge sub-agent.
@@ -455,6 +526,8 @@ def create_knowledge_agent(
     Args:
         config: Configuration object
         logger: Logger instance
+        history_manager: Shared chat history manager (used for the
+            sub-agent's per-(user, agent) memory slice)
 
     Returns:
         Knowledge agent as a tool
@@ -466,6 +539,9 @@ def create_knowledge_agent(
         system_prompt=KNOWLEDGE_AGENT_PROMPT,
         tools=tools,
         logger=logger,
+        keeps_history=True,
+        history_token_budget=4000,
+        history_manager=history_manager,
         tool_description=(
             "Delegate information lookups: web search and weather. Pass the "
             "**task** in `query` (a fully-specified question — include the "
@@ -482,6 +558,7 @@ def create_knowledge_agent(
 def create_utilities_agent(
     config: Config,
     logger: logging.Logger,
+    history_manager: ChatHistoryManager,
 ) -> BaseTool:
     """
     Create the utilities sub-agent.
@@ -489,10 +566,14 @@ def create_utilities_agent(
     Args:
         config: Configuration object
         logger: Logger instance
+        history_manager: Accepted for API uniformity with the other
+            factories; this agent is stateless (``keeps_history=False``)
+            so the manager is unused.
 
     Returns:
         Utilities agent as a tool
     """
+    _ = history_manager  # accepted but unused — utilities are pure functions
     tools = [calculator_tool, datetime_tool]
     return create_sub_agent(
         config=config,
@@ -500,6 +581,8 @@ def create_utilities_agent(
         system_prompt=UTILITIES_AGENT_PROMPT,
         tools=tools,
         logger=logger,
+        # keeps_history left at default (False) — pure-function calls,
+        # history would just be noise.
         tool_description=(
             "Delegate pure-function utility work: arithmetic, numeric "
             "conversions, current date/time. Pass the **task** in `query` "
@@ -514,6 +597,7 @@ def create_utilities_agent(
 def create_journal_agent(
     config: Config,
     logger: logging.Logger,
+    history_manager: ChatHistoryManager,
 ) -> BaseTool:
     """
     Create the journal management sub-agent.
@@ -521,6 +605,9 @@ def create_journal_agent(
     Args:
         config: Configuration object
         logger: Logger instance
+        history_manager: Shared chat history manager (used for the
+            sub-agent's per-(user, agent) memory slice — largest budget
+            of any sub-agent because daily-flow sessions are long)
 
     Returns:
         Journal agent as a tool
@@ -548,6 +635,9 @@ def create_journal_agent(
         system_prompt=JOURNAL_AGENT_PROMPT,
         tools=tools,
         logger=logger,
+        keeps_history=True,
+        history_token_budget=8000,  # largest budget — daily flows are long
+        history_manager=history_manager,
         tool_description=(
             "Delegate daily-journal work: viewing the daily summary, "
             "logging food macros, toggling habits, managing today's and "
@@ -570,6 +660,7 @@ def create_journal_agent(
 
 def setup_scufris(
     config: Config,
+    history_manager: ChatHistoryManager,
     callbacks: Optional[List[BaseCallbackHandler]] = None,
 ) -> Runnable:
     """
@@ -583,6 +674,8 @@ def setup_scufris(
 
     Args:
         config: Configuration object
+        history_manager: Per-agent chat history manager (required for sub-agents
+            that keep history)
         callbacks: Optional list of callback handlers
 
     Returns:
@@ -593,10 +686,16 @@ def setup_scufris(
     logger.info("Setting up Scufris Bot agent hierarchy...")
 
     # Create sub-agents
-    coding_agent = create_coding_agent(config, logger)
-    knowledge_agent = create_knowledge_agent(config, logger)
-    utilities_agent = create_utilities_agent(config, logger)
-    journal_agent = create_journal_agent(config, logger)
+    coding_agent = create_coding_agent(config, logger, history_manager=history_manager)
+    knowledge_agent = create_knowledge_agent(
+        config, logger, history_manager=history_manager
+    )
+    utilities_agent = create_utilities_agent(
+        config, logger, history_manager=history_manager
+    )
+    journal_agent = create_journal_agent(
+        config, logger, history_manager=history_manager
+    )
 
     # Create the main agent with sub-agents as tools
     main_agent_tools = [coding_agent, knowledge_agent, utilities_agent, journal_agent]

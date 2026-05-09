@@ -10,7 +10,7 @@ from .callbacks import (
     is_sub_agent,
 )
 from .config import Config, load_config
-from .history import ChatHistoryManager, create_history_manager
+from .history import SCUFRIS_AGENT, ChatHistoryManager, create_history_manager
 from .logging import get_logger, setup_logging, truncate_log
 from .telegram import TelegramTransport, restricted
 
@@ -27,6 +27,7 @@ __all__ = [
     "load_config",
     "ChatHistoryManager",
     "create_history_manager",
+    "SCUFRIS_AGENT",
     "setup_logging",
     "get_logger",
     "truncate_log",

@@ -41,6 +41,7 @@ Available commands:
   /help              Show this message
   /clear             Clear chat history for this session
   /history           Show chat history stats
+  /stats             Show per-agent memory breakdown
   /multiline         Toggle multiline input (end with a single '.' line)
   /thinking [full|short]
                      Show or toggle whether the agent's thinking text is
@@ -123,7 +124,7 @@ async def _handle_message(
         )
 
         process_start = time.time()
-        response_text = await agent_manager.process_message(messages)
+        response_text = await agent_manager.process_message(messages, CLI_USER_ID)
         process_duration = time.time() - process_start
 
         history_manager.add_user_message(CLI_USER_ID, user_message)
@@ -171,9 +172,32 @@ def _handle_command(
         return False, multiline
 
     if cmd == "/clear":
-        count = history_manager.get_message_count(CLI_USER_ID)
-        history_manager.clear_history(CLI_USER_ID)
-        console.print(f"[yellow]cleared {count} messages[/yellow]")
+        breakdown = history_manager.get_user_breakdown(CLI_USER_ID)
+        total = history_manager.clear_history(CLI_USER_ID)
+        if total == 0:
+            console.print("[yellow]no messages to clear[/yellow]")
+        elif breakdown:
+            parts = ", ".join(f"{a}: {n}" for a, n in sorted(breakdown.items()))
+            console.print(f"[yellow]cleared {total} messages ({parts})[/yellow]")
+        else:
+            console.print(f"[yellow]cleared {total} messages[/yellow]")
+        return False, multiline
+
+    if cmd == "/stats":
+        breakdown = history_manager.get_user_breakdown(CLI_USER_ID)
+        stats = history_manager.get_stats()
+        lines = [
+            f"total users: {stats['total_users']}",
+            f"total messages: {stats['total_messages']}",
+            f"max per user: {stats['max_history_per_user']}",
+            "per-agent (this user):",
+        ]
+        if breakdown:
+            for agent, count in sorted(breakdown.items()):
+                lines.append(f"  {agent}: {count}")
+        else:
+            lines.append("  (no messages yet)")
+        console.print("\n".join(lines))
         return False, multiline
 
     if cmd == "/history":
@@ -257,7 +281,7 @@ def main() -> None:
     config = load_config(require_telegram=False)
 
     history_manager = create_history_manager(config.max_history_per_user)
-    main_agent = setup_scufris(config=config)
+    main_agent = setup_scufris(config=config, history_manager=history_manager)
 
     console = Console()
     _setup_readline()
