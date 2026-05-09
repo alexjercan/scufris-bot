@@ -1,6 +1,6 @@
 # Prettier `/stats` table formatting
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 25
 - TAGS: cli,telegram,polish
 
@@ -52,13 +52,39 @@ visuals.
 
 ## Acceptance criteria
 
-- [ ] All columns line up regardless of agent name length, model
+- [x] All columns line up regardless of agent name length, model
       string length, or memory description content.
-- [ ] CLI `/stats` and Telegram `/stats` (in ``` block) both render
+- [x] CLI `/stats` and Telegram `/stats` (in ``` block) both render
       cleanly with no ragged rows.
-- [ ] No new third-party dependencies, OR if `tabulate` is added,
+- [x] No new third-party dependencies, OR if `tabulate` is added,
       it's justified in the task notes.
 
 ## Estimated effort
 
 ~30 minutes.
+
+## Implementation notes (post-hoc)
+
+Went with **Option C** (no new deps). Rewrote
+`utils/stats.py:format_stats_lines` to:
+
+1. Build all rows (header + data) as tuples of pre-rendered cells.
+2. Compute per-column widths as `max(len(cell) for cell in column)`.
+3. Render with two-space gutters; `calls` right-aligned, others
+   left-aligned. Trailing whitespace stripped per row.
+4. Inserted a separator row of `─` matching each column's width
+   between header and data.
+
+Smoke-tested via `python -c` — output:
+
+```
+Per-agent:
+  agent            model         memory                         calls  last
+  ───────────────  ────────────  ─────────────────────────────  ─────  ──────
+  coding_agent     qwen3:latest  0 msgs                             0  —
+  knowledge_agent  qwen3:latest  2 msgs / ~57 tok (1% of 4000)      1  0s ago
+  scufris          qwen3:latest  0 msgs                             2  0s ago
+  utilities_agent  qwen3:latest  (history disabled)                 1  0s ago
+```
+
+Same plain-text output works for CLI and the Telegram ``` block.

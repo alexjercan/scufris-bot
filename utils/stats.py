@@ -58,6 +58,10 @@ def format_stats_lines(
 
     Format is monospace-friendly so it renders identically in the CLI and
     in a Telegram ``` code block.
+
+    Per-agent rows are rendered as an aligned table with a header row.
+    Column widths are computed from the data each render so additions
+    or longer names/models don't break alignment.
     """
     stats = history_manager.get_stats()
     telemetry = history_manager.get_user_telemetry(user_id)
@@ -81,33 +85,52 @@ def format_stats_lines(
             key=lambda kv: (kv[1]["history_disabled"], kv[0]),
         )
 
-        # Column widths — recomputed per render so long agent names
-        # don't break alignment if we ever add more.
-        name_w = max(len(a) for a, _ in ordered)
-        model_w = max(len((t.get("model") or "—")) for _, t in ordered)
-
+        # Build all rows up front so we can compute column widths from
+        # the actual rendered cell contents (memory cell varies a lot).
+        header = ("agent", "model", "memory", "calls", "last")
+        rows: List[tuple] = [header]
         for agent, t in ordered:
-            agent_col = f"{agent:<{name_w}}"
-            model_col = f"{(t.get('model') or '—'):<{model_w}}"
-            calls = t["invocations"]
-            last = format_relative(t["last_activity"])
-            tail = f"calls={calls}   last={last}"
+            model_cell = t.get("model") or "—"
+            calls_cell = str(t["invocations"])
+            last_cell = format_relative(t["last_activity"])
 
             if t["history_disabled"]:
-                memory_col = "(history disabled)"
+                memory_cell = "(history disabled)"
             elif t["messages"] == 0:
-                memory_col = "0 msgs"
+                memory_cell = "0 msgs"
             else:
                 msgs = t["messages"]
                 tokens = t["tokens"]
                 budget = t["budget"]
                 if budget:
                     pct = (tokens * 100) // budget if budget else 0
-                    memory_col = f"{msgs} msgs / ~{tokens} tok ({pct}% of {budget})"
+                    memory_cell = f"{msgs} msgs / ~{tokens} tok ({pct}% of {budget})"
                 else:
-                    memory_col = f"{msgs} msgs / ~{tokens} tok"
+                    memory_cell = f"{msgs} msgs / ~{tokens} tok"
 
-            lines.append(f"  {agent_col}  [{model_col}]  {memory_col:<38}  {tail}")
+            rows.append((agent, model_cell, memory_cell, calls_cell, last_cell))
+
+        # Compute width per column from the data (header included).
+        widths = [max(len(row[i]) for row in rows) for i in range(len(header))]
+
+        # Render: header, separator, then data rows. Two-space gutters.
+        gutter = "  "
+
+        def fmt_row(row: tuple) -> str:
+            agent_c, model_c, mem_c, calls_c, last_c = row
+            return (
+                f"  {agent_c:<{widths[0]}}{gutter}"
+                f"{model_c:<{widths[1]}}{gutter}"
+                f"{mem_c:<{widths[2]}}{gutter}"
+                f"{calls_c:>{widths[3]}}{gutter}"
+                f"{last_c:<{widths[4]}}"
+            ).rstrip()
+
+        lines.append(fmt_row(header))
+        # Underline row matching header column widths.
+        lines.append("  " + gutter.join("─" * w for w in widths))
+        for row in rows[1:]:
+            lines.append(fmt_row(row))
 
     lines.append("")
     lines.append(
