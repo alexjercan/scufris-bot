@@ -5,7 +5,7 @@ from typing import List, Optional
 
 from langchain.agents import create_agent
 from langchain_core.callbacks import BaseCallbackHandler
-from langchain_core.runnables import Runnable
+from langchain_core.runnables import Runnable, RunnableConfig
 from langchain_core.tools import BaseTool, tool
 from langchain_ollama import ChatOllama
 
@@ -325,11 +325,29 @@ def create_sub_agent(
 
     # Define the tool function that wraps the agent
     @tool
-    def sub_agent_tool(query: str) -> str:
+    def sub_agent_tool(
+        query: str,
+        config: RunnableConfig,
+    ) -> str:
         """Process a query using the specialized sub-agent."""
         logger.debug(f"Sub-agent '{name}' processing query: {query[:100]}...")
 
-        response = agent.invoke({"messages": [{"role": "user", "content": query}]})
+        # In langchain_core 1.x, `StructuredTool._run` no longer
+        # auto-injects `CallbackManagerForToolRun` into @tool functions
+        # (only `RunnableConfig` gets injected). However, `BaseTool.run`
+        # already patches the config it passes us with
+        # `callbacks=run_manager.get_child()` — so the callbacks already
+        # in `config["callbacks"]` are rooted at THIS tool run.
+        #
+        # That means simply forwarding `config` to the inner
+        # `agent.invoke` is enough: every run spawned inside becomes a
+        # true descendant of us, so `parent_run_id` chains work and
+        # `_enclosing_tool_name` resolves to the sub-agent (e.g.
+        # "knowledge_agent") instead of "main".
+        response = agent.invoke(
+            {"messages": [{"role": "user", "content": query}]},
+            config=config,
+        )
 
         messages = response.get("messages", [])
         if not messages:

@@ -8,6 +8,8 @@ local CLI (where the transport is omitted).
 
 from __future__ import annotations
 
+import ast
+import json
 import logging
 import resource
 import time
@@ -22,6 +24,79 @@ from telegram import Update
 
 from .logging import truncate_log
 from .telegram import TelegramTransport
+
+# Display names used to render technical tool/agent identifiers in the
+# user-facing thinking trail. Falls back to Title Case if missing.
+DISPLAY_NAMES: Dict[str, str] = {
+    "main": "Scufris",
+    "coding_agent": "Coding Agent",
+    "knowledge_agent": "Knowledge Agent",
+    "utilities_agent": "Utilities Agent",
+    "journal_agent": "Journal Agent",
+    "weather": "Weather",
+    "web_search": "Web Search",
+    "calculator_tool": "Calculator",
+    "datetime_tool": "Date/Time",
+    "opencode": "OpenCode",
+}
+
+
+# Tool names that are themselves agents (delegations look like "asks"
+# rather than "uses"). Anything ending in "_agent" is also treated as
+# a sub-agent.
+SUB_AGENT_NAMES = {
+    "coding_agent",
+    "knowledge_agent",
+    "utilities_agent",
+    "journal_agent",
+}
+
+
+def display_name(technical: str) -> str:
+    """Map a technical tool/agent name to a human-friendly display name."""
+    if technical in DISPLAY_NAMES:
+        return DISPLAY_NAMES[technical]
+    return technical.replace("_", " ").title()
+
+
+def is_sub_agent(name: str) -> bool:
+    return name in SUB_AGENT_NAMES or name.endswith("_agent")
+
+
+def _parse_tool_arg(input_str: str) -> Optional[str]:
+    """Extract a single human-meaningful argument from a tool input string.
+
+    LangChain tool inputs typically arrive as JSON like
+    ``{"query": "weather in Bucharest"}`` or ``{"__arg1": "Bucharest"}``.
+    We try to pull out the first scalar value so the CLI can render
+    "→ ... Knowledge Agent: weather in Bucharest" instead of dumping
+    the whole dict. Returns ``None`` if there's nothing worth showing.
+    """
+    s = input_str.strip()
+    if not s:
+        return None
+    parsed: Any = None
+    try:
+        parsed = json.loads(s)
+    except (ValueError, TypeError):
+        # LangChain sometimes hands us Python repr (single quotes) instead
+        # of JSON, e.g. "{'__arg1': 'Ploiesti'}". Try literal_eval as a
+        # fallback before giving up and using the raw string.
+        try:
+            parsed = ast.literal_eval(s)
+        except (ValueError, SyntaxError):
+            return s
+    if isinstance(parsed, str):
+        return parsed
+    if isinstance(parsed, dict) and parsed:
+        # Prefer common semantic keys; otherwise take the first scalar.
+        for key in ("query", "expression", "input", "text", "__arg1"):
+            if key in parsed and isinstance(parsed[key], (str, int, float)):
+                return str(parsed[key])
+        for value in parsed.values():
+            if isinstance(value, (str, int, float)):
+                return str(value)
+    return s
 
 
 @dataclass
@@ -45,9 +120,10 @@ class ThinkingEvent:
     """
 
     kind: Literal["text", "tool_call", "tool_result"]
-    source: str  # e.g. "main", "knowledge_agent"
-    text: str  # message to display
+    source: str  # e.g. "main", "knowledge_agent" (raw technical name)
+    text: str  # for tool_call: target tool name; for text: the message
     depth: int  # nesting level (for indentation/styling)
+    arg: Optional[str] = None  # human-meaningful argument, if any
 
 
 # Type alias for the on_thinking callback.
@@ -89,8 +165,13 @@ class ToolCallbackHandler(BaseCallbackHandler):
         self.on_thinking = on_thinking
         self.logger = logging.getLogger("scufris-bot.agent.tools")
 
-        # run_id -> _RunInfo
+        # run_id -> _RunInfo (only for runs we actively track)
         self._runs: Dict[UUID, _RunInfo] = {}
+        # run_id -> parent_run_id for *every* run we've seen, even ones
+        # we don't register for logging (e.g. unnamed RunnableSequence
+        # chains). Needed so `_enclosing_tool_name` can walk through
+        # untracked intermediate chains to find the real ancestor tool.
+        self._parents: Dict[UUID, Optional[UUID]] = {}
 
     # ------------------------------------------------------------------
     # Public helpers
@@ -106,10 +187,21 @@ class ToolCallbackHandler(BaseCallbackHandler):
     def _depth_for(self, parent_run_id: Optional[UUID]) -> int:
         if parent_run_id is None:
             return 0
-        parent = self._runs.get(parent_run_id)
-        if parent is None:
-            return 0
-        return parent.depth + 1
+        # Walk up through (possibly untracked) parents to find the
+        # nearest registered ancestor and base depth on it.
+        rid: Optional[UUID] = parent_run_id
+        for _ in range(64):
+            if rid is None:
+                return 0
+            parent = self._runs.get(rid)
+            if parent is not None:
+                return parent.depth + 1
+            rid = self._parents.get(rid)
+        return 0
+
+    def _note_parent(self, run_id: UUID, parent_run_id: Optional[UUID]) -> None:
+        """Record a run's parent regardless of whether we register it."""
+        self._parents[run_id] = parent_run_id
 
     def _prefix(self, depth: int) -> str:
         if depth == 0:
@@ -131,6 +223,7 @@ class ToolCallbackHandler(BaseCallbackHandler):
             parent_run_id=parent_run_id,
         )
         self._runs[run_id] = info
+        self._parents[run_id] = parent_run_id
         return info
 
     def _pop(self, run_id: UUID) -> Optional[_RunInfo]:
@@ -145,15 +238,17 @@ class ToolCallbackHandler(BaseCallbackHandler):
         """
         rid = parent_run_id
         # Cap the walk to avoid pathological loops.
-        for _ in range(32):
+        for _ in range(64):
             if rid is None:
                 return "main"
             info = self._runs.get(rid)
-            if info is None:
-                return "main"
-            if info.kind == "tool":
+            if info is not None and info.kind == "tool":
                 return info.name
-            rid = info.parent_run_id
+            # Walk up via the parent map even when the run isn't tracked
+            # in `_runs` (LangChain emits many anonymous chain wrappers
+            # we deliberately skip from logging but still need to
+            # traverse to find the real ancestor tool).
+            rid = self._parents.get(rid)
         return "main"
 
     def _emit(self, event: ThinkingEvent) -> None:
@@ -199,13 +294,18 @@ class ToolCallbackHandler(BaseCallbackHandler):
         self.logger.debug(f"{prefix}  input: {truncate_log(input_str, 500)}")
 
         # Surface a short "calling X" line to the user-facing channel.
-        preview = truncate_log(input_str.strip(), 80)
+        # The renderer composes the friendly sentence using display_name();
+        # we just hand it the raw target name + parsed argument.
+        arg = _parse_tool_arg(input_str)
+        if arg is not None:
+            arg = truncate_log(arg, 120)
         self._emit(
             ThinkingEvent(
                 kind="tool_call",
                 source=self._enclosing_tool_name(parent_run_id),
-                text=f"{name}({preview})" if preview else name,
+                text=name,
                 depth=info.depth,
+                arg=arg,
             )
         )
 
@@ -451,6 +551,9 @@ class ToolCallbackHandler(BaseCallbackHandler):
         parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
     ) -> None:
+        # Always record the parent link so `_enclosing_tool_name` can
+        # walk through anonymous chains to find the real ancestor.
+        self._note_parent(run_id, parent_run_id)
         name = (serialized or {}).get("name") or ""
         # Skip the unnamed wrapper chains LangChain emits for every step —
         # they swamp the log without adding signal.

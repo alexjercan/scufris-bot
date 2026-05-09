@@ -23,6 +23,8 @@ from utils import (
     ToolCallbackHandler,
     create_agent_manager,
     create_history_manager,
+    display_name,
+    is_sub_agent,
     load_config,
     setup_logging,
     setup_scufris,
@@ -202,19 +204,23 @@ def main() -> None:
     # mirror the agent → sub-agent → tool nesting.
     def render_thinking(ev: ThinkingEvent) -> None:
         indent = "  " * ev.depth
+        src = display_name(ev.source)
         if ev.kind == "tool_call":
-            console.print(
-                f"[dim]{indent}→ [cyan]{ev.source}[/cyan] calls "
-                f"[bold]{ev.text}[/bold][/dim]"
-            )
+            target = display_name(ev.text)
+            verb = "asks" if is_sub_agent(ev.text) else "uses"
+            line = f"{indent}→ [cyan]{src}[/cyan] {verb} [bold]{target}[/bold]"
+            if ev.arg:
+                line += f": [grey50]{ev.arg}[/grey50]"
+            console.print(line)
         elif ev.kind == "text":
             # Truncate very long reasoning so the chat stays readable;
-            # the full text is still in the DEBUG log trace.
+            # the full text is still in the DEBUG log trace. Avoid
+            # `dim italic` — kitty+tmux renders it with a grey background.
             snippet = truncate_log(ev.text.replace("\n", " "), 240)
-            console.print(f"[dim italic]{indent}{ev.source}: {snippet}[/dim italic]")
+            console.print(f"{indent}[cyan]{src}[/cyan] [grey50]{snippet}[/grey50]")
         else:  # tool_result — currently unused, kept for completeness
             snippet = truncate_log(ev.text.replace("\n", " "), 240)
-            console.print(f"[dim]{indent}↩ {snippet}[/dim]")
+            console.print(f"{indent}[grey50]↩ {snippet}[/grey50]")
 
     # Register the callback handler so we get the same depth-aware
     # tool/sub-agent/LLM trace as the Telegram bot. No transport needed.

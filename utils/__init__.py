@@ -2,7 +2,13 @@
 
 from .agent import AgentManager, create_agent_manager
 from .agent_builder import setup_scufris
-from .callbacks import ThinkingCallback, ThinkingEvent, ToolCallbackHandler
+from .callbacks import (
+    ThinkingCallback,
+    ThinkingEvent,
+    ToolCallbackHandler,
+    display_name,
+    is_sub_agent,
+)
 from .config import Config, load_config
 from .history import ChatHistoryManager, create_history_manager
 from .logging import get_logger, setup_logging, truncate_log
@@ -15,6 +21,8 @@ __all__ = [
     "ThinkingCallback",
     "ThinkingEvent",
     "ToolCallbackHandler",
+    "display_name",
+    "is_sub_agent",
     "Config",
     "load_config",
     "ChatHistoryManager",
