@@ -8,7 +8,6 @@ import pytest
 from utils.tools.calculator import calculator_tool
 from utils.tools.datetime_tool import datetime_tool
 
-
 # ---------------------------------------------------------------------------
 # calculator_tool
 # ---------------------------------------------------------------------------

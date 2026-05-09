@@ -2,7 +2,7 @@
 
 import logging
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
@@ -223,7 +223,7 @@ class ChatHistoryManager:
         """
         key = (user_id, agent)
         self._invocations[key] += 1
-        self._last_activity[key] = datetime.utcnow()
+        self._last_activity[key] = datetime.now(timezone.utc)
 
     def get_user_telemetry(self, user_id: int) -> Dict[str, Dict[str, Any]]:
         """Return per-agent telemetry for the given user.

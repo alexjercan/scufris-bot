@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from telegram import Update
 from telegram.ext import (
@@ -30,7 +30,7 @@ telegram_transport = TelegramTransport(config.allowed_user_ids)
 history_manager = create_history_manager(config.max_history_per_user)
 
 # Captured once at process start so /stats can show uptime.
-session_started_at = datetime.utcnow()
+session_started_at = datetime.now(timezone.utc)
 
 # Setup the agent hierarchy
 main_agent = setup_scufris(config=config, history_manager=history_manager)

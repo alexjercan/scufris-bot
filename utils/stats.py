@@ -6,7 +6,7 @@ dashboard so the CLI and Telegram handlers stay in sync.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 
 
@@ -14,7 +14,7 @@ def format_relative(ts: Optional[datetime], now: Optional[datetime] = None) -> s
     """Format a UTC timestamp as 'Xs/m/h/d ago'. Returns '—' when None."""
     if ts is None:
         return "—"
-    now = now or datetime.utcnow()
+    now = now or datetime.now(timezone.utc)
     delta = now - ts
     secs = int(delta.total_seconds())
     if secs < 0:
@@ -33,7 +33,7 @@ def format_relative(ts: Optional[datetime], now: Optional[datetime] = None) -> s
 
 def format_uptime(started_at: datetime, now: Optional[datetime] = None) -> str:
     """Format an uptime delta as e.g. '1h 23m' or '45s'."""
-    now = now or datetime.utcnow()
+    now = now or datetime.now(timezone.utc)
     secs = max(0, int((now - started_at).total_seconds()))
     if secs < 60:
         return f"{secs}s"

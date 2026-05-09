@@ -1,18 +1,17 @@
 """Unit tests for utils.stats formatters and table rendering."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from utils.stats import format_relative, format_stats_lines, format_uptime
-
 
 # ---------------------------------------------------------------------------
 # format_relative
 # ---------------------------------------------------------------------------
 
 
-NOW = datetime(2026, 5, 9, 12, 0, 0)
+NOW = datetime(2026, 5, 9, 12, 0, 0, tzinfo=timezone.utc)
 
 
 def test_format_relative_none_returns_dash():

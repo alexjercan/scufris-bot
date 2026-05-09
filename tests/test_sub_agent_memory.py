@@ -24,7 +24,6 @@ from utils import agent_builder
 from utils.agent import AgentManager
 from utils.history import ChatHistoryManager
 
-
 # ---------------------------------------------------------------------------
 # Test doubles
 # ---------------------------------------------------------------------------

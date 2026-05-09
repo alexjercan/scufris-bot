@@ -12,7 +12,7 @@ import asyncio
 import atexit
 import readline
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from rich.console import Console
@@ -284,7 +284,7 @@ def main() -> None:
         full_thinking = full_env not in ("0", "false", "no", "off")
     settings: dict = {
         "full_thinking": full_thinking,
-        "started_at": datetime.utcnow(),
+        "started_at": datetime.now(timezone.utc),
         "model": config.ollama_model,
         "base_url": config.ollama_base_url,
     }

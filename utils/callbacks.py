@@ -22,9 +22,9 @@ from langchain_core.messages import BaseMessage, ToolMessage
 from langchain_core.outputs import LLMResult
 from telegram import Update
 
+from . import telemetry
 from .logging import truncate_log
 from .telegram import TelegramTransport
-from . import telemetry
 
 # Display names used to render technical tool/agent identifiers in the
 # user-facing thinking trail. Falls back to Title Case if missing.

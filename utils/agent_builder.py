@@ -10,9 +10,9 @@ from langchain_core.runnables import Runnable, RunnableConfig
 from langchain_core.tools import BaseTool, tool
 from langchain_ollama import ChatOllama
 
-from .config import Config
-from .history import ChatHistoryManager, SCUFRIS_AGENT
 from .callbacks import ToolCallbackHandler
+from .config import Config
+from .history import SCUFRIS_AGENT, ChatHistoryManager
 from .tools import (
     calculator_tool,
     daily_view_tool,

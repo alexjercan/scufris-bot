@@ -8,7 +8,6 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from utils.history import SCUFRIS_AGENT, ChatHistoryManager, create_history_manager
 
-
 # ---------------------------------------------------------------------------
 # Backward compatibility: agent defaults to "scufris"
 # ---------------------------------------------------------------------------

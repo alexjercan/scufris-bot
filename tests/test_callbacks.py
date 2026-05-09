@@ -5,7 +5,7 @@ from uuid import uuid4
 
 import pytest
 
-from utils import callbacks, telemetry
+from utils import telemetry
 from utils.callbacks import (
     DISPLAY_NAMES,
     SUB_AGENT_NAMES,
@@ -16,7 +16,6 @@ from utils.callbacks import (
     display_name,
     is_sub_agent,
 )
-
 
 # ---------------------------------------------------------------------------
 # display_name
@@ -200,7 +199,7 @@ def test_on_tool_end_unknown_run_id_is_a_noop():
 def test_emit_prior_turns_emits_tool_meta_event():
     events = []
     h = ToolCallbackHandler(on_thinking=events.append)
-    rid = _start_sub_agent_run(h)
+    _start_sub_agent_run(h)  # registers a run; rid not needed here
     events.clear()
     h.emit_prior_turns("knowledge_agent", count=3)
     [ev] = events
