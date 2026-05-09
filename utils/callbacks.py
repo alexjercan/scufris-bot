@@ -99,6 +99,33 @@ def _parse_tool_arg(input_str: str) -> Optional[str]:
     return s
 
 
+def _parse_tool_context(input_str: str) -> Optional[str]:
+    """Extract the Phase-2 ``context`` field from a sub-agent tool input.
+
+    Returns the context string when the tool input is a dict containing a
+    non-empty ``context`` key (i.e. a sub-agent call). Returns ``None`` for
+    everything else — leaf tools, dicts without ``context``, or unparseable
+    input. Empty strings are treated as "no context" so the trace stays
+    quiet for cold-start delegations.
+    """
+    s = input_str.strip()
+    if not s:
+        return None
+    try:
+        parsed = json.loads(s)
+    except (ValueError, TypeError):
+        try:
+            parsed = ast.literal_eval(s)
+        except (ValueError, SyntaxError):
+            return None
+    if not isinstance(parsed, dict):
+        return None
+    ctx = parsed.get("context")
+    if isinstance(ctx, str) and ctx.strip():
+        return ctx
+    return None
+
+
 @dataclass
 class _RunInfo:
     """Per-run state tracked by the callback handler."""
@@ -124,6 +151,7 @@ class ThinkingEvent:
     text: str  # for tool_call: target tool name; for text: the message
     depth: int  # nesting level (for indentation/styling)
     arg: Optional[str] = None  # human-meaningful argument, if any
+    context: Optional[str] = None  # Phase-2 sub-agent `context` field, if any
 
 
 # Type alias for the on_thinking callback.
@@ -299,6 +327,7 @@ class ToolCallbackHandler(BaseCallbackHandler):
         arg = _parse_tool_arg(input_str)
         if arg is not None:
             arg = truncate_log(arg, 120)
+        context = _parse_tool_context(input_str)
         self._emit(
             ThinkingEvent(
                 kind="tool_call",
@@ -306,6 +335,7 @@ class ToolCallbackHandler(BaseCallbackHandler):
                 text=name,
                 depth=info.depth,
                 arg=arg,
+                context=context,
             )
         )
 

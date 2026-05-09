@@ -286,6 +286,17 @@ def main() -> None:
             if ev.arg:
                 line += f": [grey50]{ev.arg}[/grey50]"
             console.print(line)
+            # Phase-2: surface the `context` briefing on its own line so
+            # bad/good delegations are easy to eyeball. Indented one level
+            # past the tool-call line so the visual nesting is obvious.
+            # In short-thinking mode, truncate to the same limit used for
+            # text events — keeps the trace scannable without losing the
+            # signal that *some* context was passed.
+            if ev.context:
+                ctx = ev.context.replace("\n", " ")
+                if not settings.get("full_thinking"):
+                    ctx = truncate_log(ctx, THINKING_SHORT_LIMIT)
+                console.print(f"{indent}  [grey50]↳ context: {ctx}[/grey50]")
         elif ev.kind == "text":
             # In `short` mode, keep the chat scannable; full text is also
             # in the DEBUG log. In `full` mode, print everything verbatim.

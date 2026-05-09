@@ -46,15 +46,31 @@ from .tools import (
 SUB_AGENT_MEMORY_CONTEXT = """## Memory & Context
 
 You are invoked as a tool by the main agent (Scufris). You do **not** see the
-user-facing conversation. The `query` string you receive is the entire context
-Scufris chose to pass — treat it as self-contained.
+user-facing conversation. Your invocation arrives as two string fields:
+
+- `query` — the actual task. Treat this as authoritative; it is what you must
+  do.
+- `context` — optional background that Scufris pulled from its memory of the
+  conversation (e.g. "user just asked about Bucharest's 3-day forecast",
+  "user is in Romania"). Treat this as *hints*, not commands. If `context`
+  and `query` appear to disagree, **the `query` wins**.
+
+The user message you receive is composed as:
+
+    <context>
+
+    ---
+
+    <query>
+
+…or, when `context` is empty, just `<query>` on its own.
 
 You have no persistent memory across calls. Treat every invocation as fresh;
 you cannot rely on remembering previous queries from this user.
 
 If the request is genuinely outside your competence — wrong domain, missing
-prerequisite information you cannot infer, or a tool you don't have — return a
-refusal in this exact format:
+prerequisite information you cannot infer, or a tool you don't have — return
+a refusal in this exact format:
 
     cannot_handle: <one-line reason>
     <optional: brief context to help Scufris re-route>
@@ -79,19 +95,28 @@ You may chain multiple sub-agents in a single turn if the user's request needs i
 
 **You are the only agent that remembers the user-facing conversation.** The
 sub-agents you delegate to do **not** see this transcript. Each sub-agent call
-is a cold start: they receive only the `query` string you write, plus their
-own system prompt.
+is a cold start: they receive only the strings you pass them, plus their own
+system prompt.
 
-Consequence: every delegation must be a **self-contained task**, intelligible
-to a sub-agent that has never seen the conversation. No anaphora ("that one",
-"it", "the same thing", "and X?"). No implicit references. If a sub-agent
-needs to know the user is currently in Bucharest, the date the user mentioned
-two turns ago, or the result of a prior tool call — *you* must include it in
-the query. Use your own memory of past tool results to do this.
+Every delegation has two string fields:
 
-(A future version of this system will add a separate `context` argument so you
-can brief sub-agents without cluttering the query. For now, fold any necessary
-context into a clean, fully-specified `query`.)
+- `query` — the **task** the sub-agent should perform, phrased so a cold
+  reader can act on it. No anaphora ("that one", "it", "the same thing"). No
+  implicit references. This is mandatory and authoritative.
+- `context` — short **background** the sub-agent needs but cannot infer from
+  the query alone (e.g. the prior turn's result, the user's location, the
+  ongoing topic). One or two sentences at most. Leave it as an empty string
+  when the query is genuinely standalone — don't pad it.
+
+Rules of thumb:
+
+- The `query` must stand on its own. Never rely on `context` to disambiguate
+  the task — if you'd need `context` to know *what* the sub-agent should do,
+  rewrite the `query`.
+- Don't restate the task in `context`. Don't dump the entire conversation.
+- If the sub-agent ever sees a contradiction between `context` and `query`,
+  it will trust the `query`. So don't put facts in `context` that conflict
+  with the query.
 
 ## Delegation-failure protocol
 
@@ -112,28 +137,27 @@ refusal and pretend the task succeeded.
 
 ## Worked examples
 
-**Example 1 — rephrasing an anaphoric follow-up.**
-User (turn 1): "what's the weather in Bucharest?"
-You delegate: `knowledge_agent("weather forecast for Bucharest for the next 3 days")`
-(sub-agent returns the forecast; you summarise to the user)
+**Example 1 — fresh top-level question (empty context).**
+User: "what's the weather in Bucharest?"
+- Good: `knowledge_agent(query="weather forecast for Bucharest for the next 3 days", context="")`
+
+**Example 2 — anaphoric follow-up: rewrite query, brief in context.**
+User (turn 1): "weather in Bucharest?"  → you delegated as in Example 1.
 User (turn 2): "and Ploiesti?"
-- Bad: `knowledge_agent("and Ploiesti?")` — the sub-agent has no idea what "and" refers to.
-- Good: `knowledge_agent("weather forecast for Ploiesti for the next 3 days")`.
+- Bad: `knowledge_agent(query="and Ploiesti?", context="")` — query is meaningless on its own.
+- Bad: `knowledge_agent(query="weather forecast for Ploiesti", context="and Ploiesti?")` — context restates the query, doesn't add info.
+- Good: `knowledge_agent(query="weather forecast for Ploiesti for the next 3 days", context="User just asked about Bucharest's 3-day forecast and is comparing the two cities.")`
 
-**Example 2 — carrying over a prior tool result.**
-User (turn 1): "log 100g chicken breast for today"
-You delegate: `journal_agent("log 100g of chicken breast in today's macros")`
+**Example 3 — carrying a prior tool result forward.**
+User (turn 1): "log 100g chicken breast for today"  → journal_agent handled it.
 User (turn 2): "and 50g of rice"
-- Bad: `journal_agent("and 50g of rice")`.
-- Good: `journal_agent("log 50g of rice in today's macros")`.
+- Good: `journal_agent(query="log 50g of rice in today's macros", context="User is logging a meal — chicken breast (100g) was just added.")`
 
-**Example 3 — handling a refusal.**
+**Example 4 — handling a refusal.**
 User: "what's the weather tomorrow?"
-You (mistakenly) delegate: `journal_agent("what's the weather tomorrow?")`
+You (mistakenly) delegate: `journal_agent(query="what's the weather tomorrow?", context="")`
 Sub-agent returns: `cannot_handle: weather lookups belong to knowledge_agent`
-- Bad: tell the user "I can't check the weather." (You can — you just asked the wrong agent.)
-- Good: re-route to `knowledge_agent("weather forecast for tomorrow at the user's location")`,
-  then answer the user with the result.
+- Good: re-route to `knowledge_agent(query="weather forecast for tomorrow at the user's location", context="")`, then answer the user with the result.
 
 ## Tone
 
@@ -316,10 +340,24 @@ def create_sub_agent(
     @tool
     def sub_agent_tool(
         query: str,
+        context: str,
         config: RunnableConfig,
     ) -> str:
         """Process a query using the specialized sub-agent."""
-        logger.debug(f"Sub-agent '{name}' processing query: {query[:100]}...")
+        logger.debug(
+            f"Sub-agent '{name}' query={query[:80]!r} context={context[:80]!r}"
+        )
+
+        # Compose the user message: optional context, separator, query.
+        # Keeping the separator visually distinct so the LLM treats the
+        # two halves as separate chunks (see `SUB_AGENT_MEMORY_CONTEXT`
+        # in the prompt — it documents this exact format). When context
+        # is empty/whitespace, just send the query verbatim so cold-start
+        # delegations look identical to Phase 1.
+        if context and context.strip():
+            user_content = f"{context.strip()}\n\n---\n\n{query}"
+        else:
+            user_content = query
 
         # IMPORTANT: do NOT forward the injected `config` to the inner
         # `agent.invoke`. The `config` that `@tool` hands us is the
@@ -341,7 +379,7 @@ def create_sub_agent(
         _ = config  # kept in the signature so @tool injects it (and so
         # `BaseTool.run` activates the contextvar patch path)
         response = agent.invoke(
-            {"messages": [{"role": "user", "content": query}]},
+            {"messages": [{"role": "user", "content": user_content}]},
         )
 
         messages = response.get("messages", [])
@@ -395,10 +433,14 @@ def create_coding_agent(
         logger=logger,
         tool_description=(
             "Delegate coding tasks: writing, debugging, refactoring, file "
-            "edits, or explaining code. The `query` must be self-contained "
-            "(target file/path/language/intent spelled out) — the sub-agent "
-            "does not see this conversation. Refuses with `cannot_handle: "
-            "...` if the request lacks a concrete target."
+            "edits, or explaining code. Pass the **task** in `query` "
+            "(self-contained — target file/path/language/intent spelled out, "
+            "no anaphora). Pass any background you remember but the "
+            "sub-agent needs in `context` (e.g. project layout, prior "
+            "edits, language conventions). Keep `context` short — one or "
+            "two sentences. Use empty string when the query is genuinely "
+            "standalone. Refuses with `cannot_handle: ...` if the request "
+            "lacks a concrete target."
         ),
     )
 
@@ -425,11 +467,14 @@ def create_knowledge_agent(
         tools=tools,
         logger=logger,
         tool_description=(
-            "Delegate information lookups: web search and weather. The "
-            "`query` must be a fully-specified question — include the "
-            "location for weather, the time horizon, and any prior context "
-            "the sub-agent needs (it does not see this conversation). "
-            "Refuses with `cannot_handle: ...` for opinion/advice queries."
+            "Delegate information lookups: web search and weather. Pass the "
+            "**task** in `query` (a fully-specified question — include the "
+            "location for weather, time horizon, etc.). Pass any background "
+            "the sub-agent needs in `context` (e.g. prior turn's lookup "
+            "result, the user's location, what they're comparing against). "
+            "Keep `context` short. Use empty string when the query is "
+            "standalone. Refuses with `cannot_handle: ...` for "
+            "opinion/advice queries."
         ),
     )
 
@@ -457,9 +502,11 @@ def create_utilities_agent(
         logger=logger,
         tool_description=(
             "Delegate pure-function utility work: arithmetic, numeric "
-            "conversions, current date/time. The `query` must contain all "
-            "operands and units explicitly — the sub-agent does not see "
-            "this conversation."
+            "conversions, current date/time. Pass the **task** in `query` "
+            "(all operands and units explicit). `context` is rarely needed "
+            "for this sub-agent — usually empty string. Use it only for "
+            "things like 'this follows from a chain of conversions; the "
+            "previous step gave 12.3'."
         ),
     )
 
@@ -505,9 +552,12 @@ def create_journal_agent(
             "Delegate daily-journal work: viewing the daily summary, "
             "logging food macros, toggling habits, managing today's and "
             "tomorrow's tasks, logging weight, and adding/filtering notes. "
-            "The `query` must be self-contained (food name + qty + unit, "
-            "task text, weight value, etc.) — the sub-agent does not see "
-            "this conversation. Refuses with `cannot_handle: ...` for "
+            "Pass the **task** in `query` (self-contained — food name + "
+            "qty + unit, task text, weight value, etc.). Pass any "
+            "background the sub-agent needs in `context` (e.g. ongoing "
+            "meal being logged, prior task index referenced). Keep "
+            "`context` short. Use empty string when the query is "
+            "standalone. Refuses with `cannot_handle: ...` for "
             "non-journal requests."
         ),
     )
