@@ -32,6 +32,10 @@ build-backend = "hatchling.build"
 packages = ["utils"]
 only-include = ["utils", "main.py", "cli.py"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
 [tool.mypy]
 mypy_path = "."
 
@@ -125,5 +129,6 @@ docstring-code-line-length = "dynamic"
 [dependency-groups]
 dev = [
     "mypy>=1.20.0",
+    "pytest>=9.0.3",
     "ruff>=0.14.1",
 ]

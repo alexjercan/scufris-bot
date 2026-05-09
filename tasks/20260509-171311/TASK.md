@@ -1,6 +1,6 @@
 # Phase 3.6 — Unit tests for history layer + sub-agent memory
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 20
 - TAGS: phase3,testing,quality,optional,deferred
 
@@ -119,16 +119,16 @@ Async or sync, depending on the chosen pytest-asyncio scope.
 
 ## Acceptance criteria
 
-- [ ] `pytest` runs from the project root with zero arguments and
+- [x] `pytest` runs from the project root with zero arguments and
       passes.
-- [ ] `tests/test_history.py` covers every public method of
+- [x] `tests/test_history.py` covers every public method of
       `ChatHistoryManager`, including the phantom-entry regression
       and the never-empty-slice invariant.
-- [ ] `tests/test_sub_agent_memory.py` covers Phase 3.2 plumbing
+- [x] `tests/test_sub_agent_memory.py` covers Phase 3.2 plumbing
       and Phase 3.3 load+persist behaviour with stub agents (no
       Ollama calls).
-- [ ] Total test runtime ≤ 5 seconds (no I/O, no real LLMs).
-- [ ] No flaky tests (run 10 times in a row, all pass).
+- [x] Total test runtime ≤ 5 seconds (no I/O, no real LLMs).
+- [x] No flaky tests (run 10 times in a row, all pass).
 
 ## Estimated effort
 
