@@ -12,6 +12,7 @@ import asyncio
 import atexit
 import readline
 import time
+from datetime import datetime
 from pathlib import Path
 
 from rich.console import Console
@@ -30,6 +31,7 @@ from utils import (
     setup_scufris,
     truncate_log,
 )
+from utils.stats import format_stats_lines
 
 # Pseudo user id used to scope history within the CLI session.
 CLI_USER_ID = 0
@@ -184,23 +186,20 @@ def _handle_command(
         return False, multiline
 
     if cmd == "/stats":
-        breakdown = history_manager.get_user_breakdown(CLI_USER_ID)
-        stats = history_manager.get_stats()
-        lines = [
-            f"total users: {stats['total_users']}",
-            f"total messages: {stats['total_messages']}",
-            f"max per user: {stats['max_history_per_user']}",
-            "per-agent (this user):",
-        ]
-        if breakdown:
-            for agent, count in sorted(breakdown.items()):
-                lines.append(f"  {agent}: {count}")
-        else:
-            lines.append("  (no messages yet)")
+        lines = format_stats_lines(
+            history_manager,
+            CLI_USER_ID,
+            started_at=settings["started_at"],
+            model=settings["model"],
+            base_url=settings["base_url"],
+        )
         console.print("\n".join(lines))
         return False, multiline
 
     if cmd == "/history":
+        console.print(
+            "[dim][deprecated] /history will be removed; use /stats instead[/dim]"
+        )
         count = history_manager.get_message_count(CLI_USER_ID)
         stats = history_manager.get_stats()
         console.print(
@@ -296,7 +295,12 @@ def main() -> None:
     else:
         full_env = os.environ.get("SCUFRIS_FULL_THINKING", "").lower()
         full_thinking = full_env not in ("0", "false", "no", "off")
-    settings: dict = {"full_thinking": full_thinking}
+    settings: dict = {
+        "full_thinking": full_thinking,
+        "started_at": datetime.utcnow(),
+        "model": config.ollama_model,
+        "base_url": config.ollama_base_url,
+    }
 
     # Render "thinking" events as dim chat-style messages, indented to
     # mirror the agent → sub-agent → tool nesting.
@@ -321,6 +325,15 @@ def main() -> None:
                 if not settings.get("full_thinking"):
                     ctx = truncate_log(ctx, THINKING_SHORT_LIMIT)
                 console.print(f"{indent}  [grey50]↳ context: {ctx}[/grey50]")
+        elif ev.kind == "tool_meta":
+            # Phase 3.5 — `↳ +N prior turns` for sub-agents that loaded
+            # history for this call. Emitted from on_tool_end, so it
+            # lands after the nested trace; that's intentional (option B
+            # in the task design — readability beats strict ordering).
+            if ev.prior_turns and ev.prior_turns > 0:
+                console.print(
+                    f"{indent}  [grey50]↳ +{ev.prior_turns} prior turns[/grey50]"
+                )
         elif ev.kind == "text":
             # In `short` mode, keep the chat scannable; full text is also
             # in the DEBUG log. In `full` mode, print everything verbatim.
@@ -338,7 +351,11 @@ def main() -> None:
     # Register the callback handler so we get the same depth-aware
     # tool/sub-agent/LLM trace as the Telegram bot. No transport needed.
     callback_handler = ToolCallbackHandler(on_thinking=render_thinking)
-    agent_manager = create_agent_manager(agent=main_agent, callbacks=[callback_handler])
+    agent_manager = create_agent_manager(
+        agent=main_agent,
+        callbacks=[callback_handler],
+        history_manager=history_manager,
+    )
 
     console.print(
         "[bold]Scufris CLI[/bold] — type [bold]/help[/bold] for commands, "

@@ -2,7 +2,8 @@
 
 import logging
 from collections import defaultdict
-from typing import Any, Dict, List, Tuple
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
@@ -37,6 +38,15 @@ class ChatHistoryManager:
 
         # Dictionary keyed by (user_id, agent_name).
         self._histories: Dict[Tuple[int, str], List[BaseMessage]] = defaultdict(list)
+
+        # Per-agent registry (set by create_sub_agent at build time).
+        # Keyed by agent name; values describe the agent's memory config.
+        self._agent_registry: Dict[str, Dict[str, Any]] = {}
+
+        # Per-(user, agent) telemetry — survives /clear (counters are
+        # about call traffic, not memory contents).
+        self._invocations: Dict[Tuple[int, str], int] = defaultdict(int)
+        self._last_activity: Dict[Tuple[int, str], datetime] = {}
 
         self.logger.info(
             f"Initialized chat history manager (max {max_history_per_user} messages per user, main flow)"
@@ -169,17 +179,103 @@ class ChatHistoryManager:
         """Number of distinct users with any history."""
         return len({user_id for (user_id, _agent) in self._histories})
 
+    def get_token_estimate(self, user_id: int, agent: str = SCUFRIS_AGENT) -> int:
+        """Char-proxy token estimate for a (user, agent) slice."""
+        msgs = self._histories.get((user_id, agent), [])
+        chars = sum(len(str(m.content)) for m in msgs)
+        return chars // _CHARS_PER_TOKEN
+
+    def register_agent(
+        self,
+        agent: str,
+        token_budget: Optional[int] = None,
+        history_disabled: bool = False,
+        model: Optional[str] = None,
+    ) -> None:
+        """Register an agent's memory + model config for stats reporting.
+
+        Called from ``create_sub_agent`` (and ``setup_scufris`` for the
+        main agent) so ``/stats`` can render budget, utilization and
+        model columns without hard-coding the constants. Idempotent —
+        re-registering replaces the entry.
+
+        Args:
+            agent: Agent name (e.g. ``"knowledge_agent"`` or
+                ``"scufris"`` for the main agent).
+            token_budget: Soft cap for the slice (``None`` when history
+                is disabled or the agent uses a message-count cap).
+            history_disabled: ``True`` for agents that don't keep
+                history (e.g. ``utilities_agent``).
+            model: Ollama model identifier, for the /stats model
+                column. ``None`` when unknown.
+        """
+        self._agent_registry[agent] = {
+            "token_budget": token_budget,
+            "history_disabled": history_disabled,
+            "model": model,
+        }
+
+    def record_invocation(self, user_id: int, agent: str) -> None:
+        """Increment invocation counter and update last-activity timestamp.
+
+        Called from ``sub_agent_tool`` on every call, regardless of
+        whether the agent keeps history.
+        """
+        key = (user_id, agent)
+        self._invocations[key] += 1
+        self._last_activity[key] = datetime.utcnow()
+
+    def get_user_telemetry(self, user_id: int) -> Dict[str, Dict[str, Any]]:
+        """Return per-agent telemetry for the given user.
+
+        Result schema (one entry per agent ever invoked OR registered):
+            {
+                "knowledge_agent": {
+                    "messages": int,
+                    "tokens": int,
+                    "budget": Optional[int],
+                    "history_disabled": bool,
+                    "invocations": int,
+                    "last_activity": Optional[datetime],
+                },
+                ...
+            }
+        """
+        agents: set[str] = set(self._agent_registry.keys())
+        for uid, agent in self._histories:
+            if uid == user_id:
+                agents.add(agent)
+        for uid, agent in self._invocations:
+            if uid == user_id:
+                agents.add(agent)
+
+        out: Dict[str, Dict[str, Any]] = {}
+        for agent in agents:
+            reg = self._agent_registry.get(agent, {})
+            out[agent] = {
+                "messages": len(self._histories.get((user_id, agent), [])),
+                "tokens": self.get_token_estimate(user_id, agent),
+                "budget": reg.get("token_budget"),
+                "history_disabled": reg.get("history_disabled", False),
+                "model": reg.get("model"),
+                "invocations": self._invocations.get((user_id, agent), 0),
+                "last_activity": self._last_activity.get((user_id, agent)),
+            }
+        return out
+
     def get_stats(self) -> Dict[str, Any]:
         """Return aggregate stats including per-agent breakdown."""
         total_messages = sum(len(h) for h in self._histories.values())
         per_agent: Dict[str, int] = defaultdict(int)
         for (_user_id, agent), msgs in self._histories.items():
             per_agent[agent] += len(msgs)
+        total_invocations = sum(self._invocations.values())
         return {
             "total_users": self.get_user_count(),
             "total_messages": total_messages,
             "max_history_per_user": self.max_history_per_user,
             "messages_per_agent": dict(per_agent),
+            "total_invocations": total_invocations,
         }
 
     # ------------------------------------------------------------------

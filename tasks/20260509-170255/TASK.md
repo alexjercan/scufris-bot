@@ -1,6 +1,6 @@
 # Phase 3.5 — CLI thinking trace: render '+N prior turns' hint
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 60
 - TAGS: phase3,cli,observability
 
@@ -61,11 +61,33 @@ When N=0 (cold start, or `keeps_history=False`), the line is omitted.
 
 ## Acceptance criteria
 
-- [ ] CLI thinking trace shows `↳ +N prior turns` line under
+- [x] CLI thinking trace shows `↳ +N prior turns` line under
       sub-agent tool calls when N > 0.
-- [ ] Cold-start (N = 0) calls omit the line entirely.
-- [ ] `utilities_agent` (history off) never shows the line.
-- [ ] No regression in Phase 2 `↳ context: ...` rendering.
+- [x] Cold-start (N = 0) calls omit the line entirely.
+- [x] `utilities_agent` (history off) never shows the line.
+- [x] No regression in Phase 2 `↳ context: ...` rendering.
+
+## Implementation notes (post-hoc)
+
+- `parent_run_id` is **not** exposed on the `RunnableConfig.callbacks`
+  object that `@tool` injects (callbacks arrive as the original list,
+  not a patched `CallbackManager`). Accepting `run_manager:
+  CallbackManagerForToolRun` as a kwarg also doesn't work for `@tool`
+  decorated functions.
+- First attempt used a `prior_turns_registry` keyed by tool name:
+  `sub_agent_tool` stashed `len(prior)`, `on_tool_end` popped + emitted.
+  This worked but the meta event landed **after** the full nested
+  trace, visually disconnected from the `↳ context: ...` line. The
+  task author called this "fine"; in practice it was awkward.
+- **Final design (after live dogfooding):** dropped the registry.
+  Added `ToolCallbackHandler.emit_prior_turns(name, count)` which
+  resolves depth + parent by walking `_runs` for the most recent
+  in-flight tool with that name (`on_tool_start` always fires before
+  the tool body executes, so the entry is guaranteed to exist).
+  `sub_agent_tool` finds the handler in `config["callbacks"]` and
+  calls `emit_prior_turns` directly, *before* invoking the inner
+  agent. Result: `↳ +N prior turns` renders right under
+  `↳ context: ...`, before the sub-agent's reasoning.
 
 ## Estimated effort
 

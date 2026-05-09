@@ -1,6 +1,6 @@
 # Multi-agent memory & prompt synergy: design discussion
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 70
 - TAGS: design,agents,prompts,memory
 
@@ -472,3 +472,38 @@ Mapped to the phased rollout above.
   regression."
 - "Tune per-agent window sizes and `context` length cap based on
   observed token costs."
+
+## Postscript (closure)
+
+Phases 1–3 shipped end-to-end. Closing this design doc — its purpose
+(align on Option F + plan a phased rollout) is fulfilled.
+
+**Shipped:**
+- Phase 1 — `tasks/20260509-162623` (prompts).
+- Phase 2 — `tasks/20260509-164235` (`context` arg + thinking-trace render).
+- Phase 3 — `tasks/20260509-170251`/`170252`/`170253` (rekey, plumb
+  user_id, wire load+persist), `tasks/20260509-170254` + `172715`
+  (`/clear` breakdown + `/stats`), `tasks/20260509-170255` (`+N prior
+  turns` hint).
+
+**Not shipped, intentionally:**
+- Phase 3.6 unit tests (`tasks/20260509-171311`) — DEFERRED. No test
+  infra in the repo yet; smoke-tested inline.
+- Phase 3.4c remove `/history` (`tasks/20260509-174354`) — DEFERRED
+  pending dogfooding period.
+
+**Phase 4 retirement:**
+- *Per-agent policy switches*: already satisfied — `create_sub_agent`
+  takes `keeps_history`/`history_token_budget` kwargs; factories
+  hard-code per-agent values. No additional config object needed at
+  current scale.
+- *Replay/eval harness*: not filed. Speculative; file only when there's
+  a concrete delegation-quality regression to chase.
+- *Window/context tuning*: ongoing dogfooding, not a discrete task.
+  Current defaults (4k coding/knowledge, 8k journal, utilities=off)
+  hold up so far.
+
+Open follow-ups parked elsewhere (not blocking this doc):
+- `tasks/20260509-162614` — history compaction spike (pri 20).
+- `tasks/20260509-165516` — telemetry JSONL spike (pri 30).
+- `tasks/20260509-175241` — prettier `/stats` table (pri 25).

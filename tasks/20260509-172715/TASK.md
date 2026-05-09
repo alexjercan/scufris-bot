@@ -1,6 +1,6 @@
 # Phase 3.4b — Richer `/stats` + deprecate `/history`
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 65
 - TAGS: phase3,cli,telegram,observability
 
@@ -142,25 +142,82 @@ File a follow-up task `Phase 3.4c — remove /history` (priority 30,
 
 ## Acceptance criteria
 
-- [ ] `/stats` output includes uptime, model+base URL, total
+- [x] `/stats` output includes uptime, model+base URL, total
       sub-agent invocations, and the per-agent table with msgs /
       chars / token-estimate / budget / utilization% / call count /
-      last-activity columns.
-- [ ] `register_agent` is called for all four sub-agents at build
+      last-activity columns. *(Verified via `format_stats_lines`
+      smoke test — sample output recorded below.)*
+- [x] `register_agent` is called for all four sub-agents at build
       time; `keeps_history=False` agents are flagged in the registry
-      and rendered without budget/utilization columns.
-- [ ] Invocation count increments exactly once per `sub_agent_tool`
-      call, including for `cannot_handle` returns.
-- [ ] Last-activity timestamp updates on every invocation;
+      and rendered without budget/utilization columns. *(Confirmed:
+      utilities_agent renders `(history disabled)` line; the other
+      three render with budget %.)*
+- [x] Invocation count increments exactly once per `sub_agent_tool`
+      call, including for `cannot_handle` returns. *(Counter is
+      bumped at the very top of the tool body, before any branching.)*
+- [x] Last-activity timestamp updates on every invocation;
       `format_relative` returns "—" for agents never called.
-- [ ] `/history` still prints its old output but prefixed with the
+      *(Verified: 12-min-old timestamp renders "12m ago"; cold
+      agents render "—".)*
+- [x] `/history` still prints its old output but prefixed with the
       deprecation notice. Manual test: run `/history`, confirm
-      notice + old format both appear.
-- [ ] Telegram `/stats` and `/clear` mirror the CLI content (modulo
-      monospace formatting).
-- [ ] Counters survive `/clear` (Q3 above).
-- [ ] Follow-up task `Phase 3.4c — remove /history` filed with
-      STATUS: DEFERRED, priority 30.
+      notice + old format both appear. *(CLI prints
+      `[deprecated] /history will be removed; use /stats instead`;
+      Telegram prepends `⚠️ /history is deprecated; use /stats
+      instead.`)*
+- [x] Telegram `/stats` and `/clear` mirror the CLI content (modulo
+      monospace formatting). *(Telegram wraps `format_stats_lines`
+      output in a Markdown ``` block for column alignment.)*
+- [x] Counters survive `/clear` (Q3 above). *(`clear_user` only
+      touches `_histories`; `_invocations` and `_last_activity` are
+      untouched.)*
+- [x] Follow-up task `Phase 3.4c — remove /history` filed with
+      STATUS: DEFERRED, priority 30. *(Filed as
+      `tasks/20260509-174354`.)*
+
+## Sample `/stats` output
+
+```
+Scufris session stats
+─────────────────────
+Uptime:                1h 23m
+Model:                 qwen3:latest @ http://localhost:11434
+Sub-agent invocations: 3
+
+Per-agent memory:
+  coding_agent       0 msgs                              calls=0   last=—
+  journal_agent      0 msgs                              calls=0   last=—
+  knowledge_agent    2 msgs   ~150 tok / 4000 budget, 3%        calls=2   last=0s ago
+  utilities_agent    (history disabled)   calls=1   last=12m ago
+
+Totals: 2 messages across 1 agent(s)
+```
+
+## Implementation notes
+
+- New module `utils/stats.py` owns rendering (`format_relative`,
+  `format_uptime`, `format_stats_lines`) so CLI + Telegram share one
+  source of truth.
+- `ChatHistoryManager` gained: `_agent_registry`, `_invocations`,
+  `_last_activity` dicts; `register_agent`, `record_invocation`,
+  `get_token_estimate`, `get_user_telemetry` methods. `get_stats`
+  also now returns `total_invocations`.
+- `create_sub_agent` resolves `user_id` once at the top of
+  `sub_agent_tool` (not just inside the `keeps_history` branch) so
+  telemetry works for stateless agents too.
+- `create_utilities_agent` now forwards `history_manager` into
+  `create_sub_agent` (was previously `_ = history_manager`) so the
+  registry sees it.
+- Session start time captured in CLI `settings` dict and as
+  module-level `session_started_at` in `main.py`.
+- Open question Q3 resolved: counters survive `/clear` (matches the
+  proposal — `/clear` is about memory, not telemetry).
+
+## Known follow-ups
+
+- `datetime.utcnow()` is deprecated in Python 3.12+. Switch to
+  `datetime.now(UTC)` codebase-wide as a separate cleanup pass — not
+  filed as a tatr task yet, low priority.
 
 ## Dependencies
 

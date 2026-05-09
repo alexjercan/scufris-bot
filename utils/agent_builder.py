@@ -11,7 +11,8 @@ from langchain_core.tools import BaseTool, tool
 from langchain_ollama import ChatOllama
 
 from .config import Config
-from .history import ChatHistoryManager
+from .history import ChatHistoryManager, SCUFRIS_AGENT
+from .callbacks import ToolCallbackHandler
 from .tools import (
     calculator_tool,
     daily_view_tool,
@@ -347,6 +348,18 @@ def create_sub_agent(
             "history_manager instance."
         )
 
+    # Register the agent's memory config so /stats can render budget +
+    # utilization + model columns. Idempotent — safe even if
+    # create_sub_agent is called more than once with the same name
+    # during dev reloads.
+    if history_manager is not None:
+        history_manager.register_agent(
+            agent=name,
+            token_budget=history_token_budget if keeps_history else None,
+            history_disabled=not keeps_history,
+            model=config.ollama_model,
+        )
+
     # Create the LLM for the sub-agent
     llm = ChatOllama(
         model=config.ollama_model,
@@ -370,15 +383,22 @@ def create_sub_agent(
             f"Sub-agent '{name}' query={query[:80]!r} context={context[:80]!r}"
         )
 
+        # ---- Resolve user_id + record invocation (Phase 3.4b) ----
+        # Pull user_id once up front so we can record telemetry even
+        # for history-disabled agents (utilities_agent). Missing
+        # user_id is only fatal when keeps_history=True; for stateless
+        # agents we just skip the telemetry update.
+        user_id: Optional[int] = (config.get("configurable") or {}).get("user_id")
+        if history_manager is not None and user_id is not None:
+            history_manager.record_invocation(user_id, name)
+
         # ---- Load prior history (Phase 3.3) ----
         # When keeps_history=True we look up the per-(user, agent) slice
         # so this call sees its own previous turns. user_id arrives via
         # configurable (Phase 3.2). Missing user_id is a programmer
         # error in the wiring — fail loudly.
         prior: List = []
-        user_id: Optional[int] = None
         if keeps_history:
-            user_id = (config.get("configurable") or {}).get("user_id")
             if user_id is None:
                 raise ValueError(
                     f"sub_agent_tool[{name}]: configurable.user_id is "
@@ -392,6 +412,21 @@ def create_sub_agent(
                     f"Sub-agent '{name}' loaded {len(prior)} prior message(s) "
                     f"for user {user_id}"
                 )
+                # Phase 3.5 — surface `↳ +N prior turns` immediately,
+                # before the inner agent runs, so the hint renders right
+                # under the `↳ context:` line instead of being buried
+                # below the full nested trace. Walk every handler in
+                # config["callbacks"] (which arrives as a list of
+                # BaseCallbackHandler) and ping each ToolCallbackHandler.
+                cb_list = config.get("callbacks") if config else None
+                handlers = (
+                    cb_list
+                    if isinstance(cb_list, list)
+                    else getattr(cb_list, "handlers", []) or []
+                )
+                for h in handlers:
+                    if isinstance(h, ToolCallbackHandler):
+                        h.emit_prior_turns(name, len(prior))
 
         # Compose the user message: optional context, separator, query.
         # Keeping the separator visually distinct so the LLM treats the
@@ -573,7 +608,7 @@ def create_utilities_agent(
     Returns:
         Utilities agent as a tool
     """
-    _ = history_manager  # accepted but unused — utilities are pure functions
+    _ = history_manager  # passed through so the registry sees this agent
     tools = [calculator_tool, datetime_tool]
     return create_sub_agent(
         config=config,
@@ -581,8 +616,10 @@ def create_utilities_agent(
         system_prompt=UTILITIES_AGENT_PROMPT,
         tools=tools,
         logger=logger,
+        history_manager=history_manager,
         # keeps_history left at default (False) — pure-function calls,
-        # history would just be noise.
+        # history would just be noise. Manager is forwarded only so
+        # `register_agent` runs (for /stats visibility).
         tool_description=(
             "Delegate pure-function utility work: arithmetic, numeric "
             "conversions, current date/time. Pass the **task** in `query` "
@@ -715,6 +752,17 @@ def setup_scufris(
         llm,
         tools=main_agent_tools,
         system_prompt=MAIN_AGENT_PROMPT,
+    )
+
+    # Register the main agent so /stats shows its model + history
+    # slice. Main flow uses a message-count cap (not token budget),
+    # so token_budget stays None — the renderer falls back to
+    # plain "~N tok" without a budget %.
+    history_manager.register_agent(
+        agent=SCUFRIS_AGENT,
+        token_budget=None,
+        history_disabled=False,
+        model=config.ollama_model,
     )
 
     logger.info("Scufris Bot agent hierarchy setup complete")

@@ -146,12 +146,16 @@ class ThinkingEvent:
     assistant reply. The Telegram bot ignores them by default.
     """
 
-    kind: Literal["text", "tool_call", "tool_result"]
+    kind: Literal["text", "tool_call", "tool_result", "tool_meta"]
     source: str  # e.g. "main", "knowledge_agent" (raw technical name)
     text: str  # for tool_call: target tool name; for text: the message
     depth: int  # nesting level (for indentation/styling)
     arg: Optional[str] = None  # human-meaningful argument, if any
     context: Optional[str] = None  # Phase-2 sub-agent `context` field, if any
+    # Phase 3.5 — for `tool_meta` events emitted in `on_tool_end`,
+    # the count of prior history turns the sub-agent loaded for THIS
+    # call (>0 only). The CLI renders it as `↳ +N prior turns`.
+    prior_turns: Optional[int] = None
 
 
 # Type alias for the on_thinking callback.
@@ -207,6 +211,48 @@ class ToolCallbackHandler(BaseCallbackHandler):
 
     def set_update(self, update: Optional[Update]) -> None:
         self.update = update
+
+    def emit_prior_turns(self, tool_name: str, count: int) -> None:
+        """Emit a `tool_meta` event for a sub-agent that loaded N>0 prior turns.
+
+        Called from inside `sub_agent_tool` *before* the inner agent
+        invocation so the `↳ +N prior turns` line renders directly
+        under the `↳ context: ...` line in the CLI thinking trace —
+        not after the full nested trace (Phase 3.5).
+
+        Resolves depth + parent by looking up the most recent active
+        run with kind="tool" and matching ``tool_name``. ``on_tool_start``
+        always fires before this call (the agent calls the tool, which
+        triggers the callback, which then runs our function), so the
+        entry is guaranteed to be present.
+        """
+        if count <= 0:
+            return
+        # Find the in-flight tool entry for this name. We pick the most
+        # recently-started one in case of nesting.
+        candidates = [
+            info
+            for info in self._runs.values()
+            if info.kind == "tool" and info.name == tool_name
+        ]
+        if not candidates:
+            # No matching run — emit at depth 0 with no parent. Better
+            # than dropping the hint silently.
+            depth = 0
+            source = "main"
+        else:
+            info = max(candidates, key=lambda i: i.start)
+            depth = info.depth
+            source = self._enclosing_tool_name(info.parent_run_id)
+        self._emit(
+            ThinkingEvent(
+                kind="tool_meta",
+                source=source,
+                text=tool_name,
+                depth=depth,
+                prior_turns=count,
+            )
+        )
 
     # ------------------------------------------------------------------
     # Internal helpers

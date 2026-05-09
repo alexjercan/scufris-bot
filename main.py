@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime
 
 from telegram import Update
 from telegram.ext import (
@@ -20,11 +21,15 @@ from utils import (
     setup_scufris,
     truncate_log,
 )
+from utils.stats import format_stats_lines
 
 logger = setup_logging(default_level=logging.INFO)
 config = load_config()
 telegram_transport = TelegramTransport(config.allowed_user_ids)
 history_manager = create_history_manager(config.max_history_per_user)
+
+# Captured once at process start so /stats can show uptime.
+session_started_at = datetime.utcnow()
 
 # Setup the agent hierarchy
 main_agent = setup_scufris(config=config, history_manager=history_manager)
@@ -36,6 +41,7 @@ callbacks = [callback_handler]
 agent_manager = create_agent_manager(
     agent=main_agent,
     callbacks=callbacks,
+    history_manager=history_manager,
 )
 
 
@@ -129,7 +135,7 @@ async def clear_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 @restricted(config.allowed_user_ids)
 async def history_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show chat history statistics"""
+    """Show chat history statistics (deprecated — use /stats)."""
     user_info = telegram_transport.get_user_info(update)
     user_id = user_info["id"]
 
@@ -137,6 +143,7 @@ async def history_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     stats = history_manager.get_stats()
 
     stats_text = (
+        "⚠️ /history is deprecated; use /stats instead.\n\n"
         f"📊 Chat History Stats\n\n"
         f"Your messages: {message_count}\n"
         f"Max per user: {stats['max_history_per_user']}\n"
@@ -149,29 +156,20 @@ async def history_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 @restricted(config.allowed_user_ids)
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show per-agent memory breakdown for the user."""
+    """Show per-agent memory + telemetry breakdown for the user."""
     user_info = telegram_transport.get_user_info(update)
     user_id = user_info["id"]
 
-    breakdown = history_manager.get_user_breakdown(user_id)
-    stats = history_manager.get_stats()
-
-    lines = [
-        "📊 Scufris Stats",
-        "",
-        f"Total users: {stats['total_users']}",
-        f"Total messages: {stats['total_messages']}",
-        f"Max per user: {stats['max_history_per_user']}",
-        "",
-        "Per-agent (your slices):",
-    ]
-    if breakdown:
-        for agent, count in sorted(breakdown.items()):
-            lines.append(f"  {agent}: {count}")
-    else:
-        lines.append("  (no messages yet)")
-
-    await update.message.reply_text("\n".join(lines))
+    lines = format_stats_lines(
+        history_manager,
+        user_id,
+        started_at=session_started_at,
+        model=config.ollama_model,
+        base_url=config.ollama_base_url,
+    )
+    body = "\n".join(lines)
+    # Wrap in monospace for stable column alignment on Telegram.
+    await update.message.reply_text(f"```\n{body}\n```", parse_mode="Markdown")
 
 
 def main():

@@ -6,6 +6,8 @@ from typing import Any, Dict, List, Optional
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.runnables import Runnable
 
+from .history import SCUFRIS_AGENT, ChatHistoryManager
+
 
 class AgentManager:
     """Manages the LLM agent for processing messages."""
@@ -14,6 +16,7 @@ class AgentManager:
         self,
         agent: Runnable,
         callbacks: Optional[List[BaseCallbackHandler]] = None,
+        history_manager: Optional[ChatHistoryManager] = None,
     ):
         """
         Initialize the agent manager.
@@ -21,10 +24,17 @@ class AgentManager:
         Args:
             agent: The main agent runnable (created by setup_scufris)
             callbacks: List of callback handlers
+            history_manager: Optional shared history manager. When set,
+                ``process_message`` records a per-(user, scufris)
+                invocation + last-activity timestamp so ``/stats`` can
+                show traffic to the main agent (the main agent isn't
+                routed via ``sub_agent_tool``, so it never gets
+                ``record_invocation`` from the sub-agent path).
         """
         self.logger = logging.getLogger("scufris-bot.agent")
 
         self.agent = agent
+        self.history_manager = history_manager
         self.logger.info("Initialized agent manager")
 
         # Setup callbacks
@@ -54,6 +64,13 @@ class AgentManager:
             ValueError: If no response is received from the agent
         """
         self.logger.debug(f"Processing {len(messages)} messages for user {user_id}")
+
+        # Record traffic to the main agent so /stats reflects user
+        # turns (the sub-agent invocation hook only fires for
+        # delegated calls — the main agent is never wrapped in
+        # sub_agent_tool).
+        if self.history_manager is not None:
+            self.history_manager.record_invocation(user_id, SCUFRIS_AGENT)
 
         # Invoke the agent with callbacks. ``configurable.user_id`` is
         # propagated by LangChain to every nested runnable, including
@@ -105,6 +122,7 @@ class AgentManager:
 def create_agent_manager(
     agent: Runnable,
     callbacks: Optional[List[BaseCallbackHandler]] = None,
+    history_manager: Optional[ChatHistoryManager] = None,
 ) -> AgentManager:
     """
     Create and return an agent manager instance.
@@ -112,8 +130,10 @@ def create_agent_manager(
     Args:
         agent: The main agent runnable
         callbacks: Optional list of callback handlers
+        history_manager: Optional shared history manager — see
+            :class:`AgentManager` for behaviour when set.
 
     Returns:
         Initialized AgentManager instance
     """
-    return AgentManager(agent, callbacks)
+    return AgentManager(agent, callbacks, history_manager=history_manager)
