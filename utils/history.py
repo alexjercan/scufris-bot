@@ -82,10 +82,10 @@ class ChatHistoryManager:
 
     def get_history_with_new_message(
         self, user_id: int, new_message: str, agent: str = SCUFRIS_AGENT
-    ) -> List[Dict[str, str]]:
+    ) -> List[Dict[str, Any]]:
         """Get history with a new user message appended (dict format for agent input)."""
         history = self.get_history(user_id, agent=agent)
-        messages = [
+        messages: List[Dict[str, Any]] = [
             {
                 "role": "user" if isinstance(msg, HumanMessage) else "assistant",
                 "content": msg.content,

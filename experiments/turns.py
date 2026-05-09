@@ -53,7 +53,7 @@ def main() -> int:
 
     # Delegations-per-turn distribution
     print("Delegations per turn:")
-    bins = Counter()
+    bins: Counter = Counter()
     for n in sizes:
         bins["1" if n == 1 else "2" if n == 2 else "3+"] += 1
     total = sum(bins.values())

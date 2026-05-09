@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime, timezone
 
+from langchain_core.callbacks import BaseCallbackHandler
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -37,7 +38,7 @@ main_agent = setup_scufris(config=config, history_manager=history_manager)
 
 # Create callback handler and agent manager
 callback_handler = ToolCallbackHandler(telegram_transport)
-callbacks = [callback_handler]
+callbacks: list[BaseCallbackHandler] = [callback_handler]
 
 agent_manager = create_agent_manager(
     agent=main_agent,
@@ -132,6 +133,7 @@ async def clear_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     else:
         msg = f"🗑️ Cleared {total} messages from your chat history."
 
+    assert update.message is not None, "Update has no message"
     await update.message.reply_text(msg)
 
 
@@ -150,6 +152,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     )
     body = "\n".join(lines)
     # Wrap in monospace for stable column alignment on Telegram.
+    assert update.message is not None, "Update has no message"
     await update.message.reply_text(f"```\n{body}\n```", parse_mode="Markdown")
 
 

@@ -81,7 +81,7 @@ class _FakeResponse:
 
 
 @pytest.fixture
-def wttr_recorder(monkeypatch):
+def wttr_recorder(monkeypatch) -> Dict[str, Any]:
     """Patch `requests.get` and record the URL/timeout used."""
     calls: Dict[str, Any] = {}
 
@@ -248,7 +248,9 @@ class _FakeOpencodeClient:
         self.session = _FakeSessionAPI(response, raise_on_create=raise_on_create)
 
 
-def _install_fake_opencode(monkeypatch, *, response=None, raise_on_create=None):
+def _install_fake_opencode(
+    monkeypatch, *, response=None, raise_on_create=None
+) -> Dict[str, Any]:
     holder: Dict[str, Any] = {}
 
     def factory(base_url=None):

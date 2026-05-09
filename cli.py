@@ -180,8 +180,10 @@ def _handle_command(
         if total == 0:
             console.print("[yellow]no messages to clear[/yellow]")
         elif breakdown:
-            parts = ", ".join(f"{a}: {n}" for a, n in sorted(breakdown.items()))
-            console.print(f"[yellow]cleared {total} messages ({parts})[/yellow]")
+            breakdown_str = ", ".join(f"{a}: {n}" for a, n in sorted(breakdown.items()))
+            console.print(
+                f"[yellow]cleared {total} messages ({breakdown_str})[/yellow]"
+            )
         else:
             console.print(f"[yellow]cleared {total} messages[/yellow]")
         return False, multiline

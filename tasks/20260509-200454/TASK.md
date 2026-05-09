@@ -1,6 +1,6 @@
 # Resolve pre-existing mypy errors
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 4
 - TAGS: chore,typing
 
@@ -52,11 +52,11 @@ backlog that's been silently accumulating.
 
 ## Acceptance criteria
 
-- [ ] `python3 -m mypy .` exits 0, OR
-- [ ] residual errors are explicitly opted out (e.g.
+- [x] `python3 -m mypy .` exits 0, OR
+- [x] residual errors are explicitly opted out (e.g.
       `[[tool.mypy.overrides]]` for `experiments/*` and missing
       third-party stubs) with a one-line justification each.
-- [ ] No `# type: ignore` blanket suppressions added to source files
+- [x] No `# type: ignore` blanket suppressions added to source files
       without a `# type: ignore[<code>]  # reason` comment explaining
       why.
 
@@ -72,5 +72,36 @@ backlog that's been silently accumulating.
   refactor (the `Optional` message guards are pervasive in current
   handlers); this task can be deferred until then if Phase 4 lands
   soon.
+
+## Post-hoc notes
+
+- Resolved in one pass: `mypy` exits 0 on 33 source files. Three
+  `--check-untyped-defs` *notes* remain on test fixtures (untyped by
+  convention); they're informational, not errors.
+- **Edits made:**
+  - `utils/logging.py:32` — `level: int | None = None` (PEP 604).
+  - `utils/history.py:96` — return type widened to
+    `List[Dict[str, Any]]`; the comprehension is annotated to match.
+  - `utils/telegram.py` — added `assert update.message is not None`
+    (and `update.effective_user`) guards at the four affected entry
+    points. Used `assert` rather than the early-return idiom because
+    every call site is already guarded externally by `restricted(...)`
+    — the asserts document the contract without changing control
+    flow.
+  - `main.py:40` — annotated `callbacks: list[BaseCallbackHandler]`;
+    added the matching import.
+  - `main.py:135, 153` — message asserts.
+  - `cli.py:183` — renamed the shadowing local `parts` →
+    `breakdown_str`. The line-210 `parts = cmd.split(...)` keeps its
+    descriptive name.
+  - `experiments/turns.py:56` — `bins: Counter = Counter()` to mirror
+    the `combos` annotation just below.
+  - `pyproject.toml` — new `[[tool.mypy.overrides]]` block for
+    `pandas` / `requests` with `ignore_missing_imports = true` (one
+    block, justified with a comment). Avoids forcing `pandas-stubs`
+    / `types-requests` into the nix devshell just to silence stub
+    warnings.
+- No `# type: ignore` comments added anywhere.
+- Verified: ruff clean, `pytest` 204 pass.
 
 

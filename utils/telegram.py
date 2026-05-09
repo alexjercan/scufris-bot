@@ -48,6 +48,7 @@ async def send_long_message(update: Update, text: str, **kwargs) -> None:
         text: The text to send
         **kwargs: Additional arguments to pass to reply_text (e.g., parse_mode)
     """
+    assert update.message is not None, "Update has no message to reply to"
     chunks = trim_for_telegram(text)
 
     for i, chunk in enumerate(chunks):
@@ -83,6 +84,7 @@ def restricted(allowed_ids: List[int]) -> Callable:
                 logger.warning(
                     f"Unauthorized access attempt from user {username} (ID: {user_id})"
                 )
+                assert update.message is not None, "Update has no message to reply to"
                 await update.message.reply_text(
                     "⛔ You are not authorized to use this bot."
                 )
@@ -122,6 +124,7 @@ class TelegramTransport:
             Dictionary with user information
         """
         user = update.effective_user
+        assert user is not None, "Update has no effective_user"
         return {
             "id": user.id,
             "username": user.username or user.first_name or "Unknown",
@@ -139,6 +142,7 @@ class TelegramTransport:
         Returns:
             Message text
         """
+        assert update.message is not None, "Update has no message"
         return update.message.text or ""
 
     async def send_message(self, update: Update, text: str, **kwargs) -> None:
@@ -159,6 +163,7 @@ class TelegramTransport:
         Args:
             update: Telegram update object
         """
+        assert update.message is not None, "Update has no message"
         await update.message.chat.send_action(action)
 
     async def send_error_message(self, update: Update, error: str) -> None:
@@ -169,6 +174,7 @@ class TelegramTransport:
             update: Telegram update object
             error: Error message to send
         """
+        assert update.message is not None, "Update has no message"
         await update.message.reply_text(f"❌ Error: {error}")
 
     def is_authorized(self, user_id: int) -> bool:

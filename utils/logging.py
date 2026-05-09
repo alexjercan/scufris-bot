@@ -29,7 +29,7 @@ def truncate_log(text: str, max_length: int = 200) -> str:
 
 
 def setup_logging(
-    level: int = None, default_level: int = logging.INFO
+    level: int | None = None, default_level: int = logging.INFO
 ) -> logging.Logger:
     """
     Configure rich logger for the application.

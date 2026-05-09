@@ -43,7 +43,7 @@ class _FakeCompleted:
 
 
 @pytest.fixture
-def recorder(monkeypatch):
+def recorder(monkeypatch) -> Dict[str, Any]:
     """Capture argv passed to subprocess.run; return canned stdout."""
     calls: Dict[str, Any] = {"argv": None, "kwargs": None}
 
