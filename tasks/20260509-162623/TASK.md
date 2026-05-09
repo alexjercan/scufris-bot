@@ -1,6 +1,6 @@
 # Phase 1 — Prompt rework for Option F memory model
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 75
 - TAGS: prompts,agents,phase1
 
