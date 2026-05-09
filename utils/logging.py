@@ -28,7 +28,9 @@ def truncate_log(text: str, max_length: int = 200) -> str:
     return f"{text[:max_length]}... ({len(text)} chars total)"
 
 
-def setup_logging(level: int = None) -> logging.Logger:
+def setup_logging(
+    level: int = None, default_level: int = logging.INFO
+) -> logging.Logger:
     """
     Configure rich logger for the application.
 
@@ -37,18 +39,26 @@ def setup_logging(level: int = None) -> logging.Logger:
     - All other library logs are shown at ERROR level only
 
     Args:
-        level: Logging level for scufris-bot (default: INFO from env or logging.INFO)
+        level: Explicit logging level for scufris-bot. Overrides everything.
+        default_level: Level used when neither ``level`` nor the ``LOG_LEVEL``
+            environment variable is set. Lets each entry point pick a sensible
+            default (e.g. DEBUG for the CLI, INFO for the Telegram bot).
 
     Returns:
         Configured logger instance
 
     Environment Variables:
-        LOG_LEVEL: Set log level (DEBUG, INFO, WARNING, ERROR, CRITICAL). Default: INFO
+        LOG_LEVEL: Set log level (DEBUG, INFO, WARNING, ERROR, CRITICAL).
+            Takes precedence over ``default_level`` but not over an explicit
+            ``level`` argument.
     """
     # Get log level from environment if not provided
     if level is None:
-        level_str = os.getenv("LOG_LEVEL", "INFO")
-        level = getattr(logging, level_str.upper(), logging.INFO)
+        level_str = os.getenv("LOG_LEVEL")
+        if level_str:
+            level = getattr(logging, level_str.upper(), default_level)
+        else:
+            level = default_level
 
     # Set root logger to ERROR to suppress debug logs from other libraries
     logging.basicConfig(

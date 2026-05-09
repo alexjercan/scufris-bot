@@ -1,3 +1,5 @@
+import logging
+
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -19,7 +21,7 @@ from utils import (
     truncate_log,
 )
 
-logger = setup_logging()
+logger = setup_logging(default_level=logging.INFO)
 config = load_config()
 telegram_transport = TelegramTransport(config.allowed_user_ids)
 history_manager = create_history_manager(config.max_history_per_user)

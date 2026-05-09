@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import atexit
 import readline
-import sys
 import time
 from pathlib import Path
 
@@ -20,6 +19,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 
 from utils import (
+    ToolCallbackHandler,
     create_agent_manager,
     create_history_manager,
     load_config,
@@ -184,14 +184,19 @@ def _handle_command(
 
 
 def main() -> None:
-    logger = setup_logging()
+    import logging
+
+    # CLI is a debugging tool — surface everything by default. Overridable
+    # via the LOG_LEVEL env var.
+    logger = setup_logging(default_level=logging.DEBUG)
     config = load_config(require_telegram=False)
 
     history_manager = create_history_manager(config.max_history_per_user)
     main_agent = setup_scufris(config=config)
-    # No callback handler needed for the CLI — tool activity is already
-    # surfaced through the standard logger.
-    agent_manager = create_agent_manager(agent=main_agent, callbacks=[])
+    # Register the callback handler so we get the same depth-aware
+    # tool/sub-agent/LLM trace as the Telegram bot. No transport needed.
+    callback_handler = ToolCallbackHandler()
+    agent_manager = create_agent_manager(agent=main_agent, callbacks=[callback_handler])
 
     console = Console()
     _setup_readline()

@@ -464,7 +464,7 @@ def weight_entry_tool(
 
     if offset != 0:
         command.extend(["--offset", str(offset)])
-    return run_command(command, f"adding/updating weight entry")
+    return run_command(command, "adding/updating weight entry")
 
 
 @tool

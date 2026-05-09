@@ -1,11 +1,22 @@
-"""Callback handlers for the Scufris Bot agent."""
+"""Callback handlers for the Scufris Bot agent.
+
+The :class:`ToolCallbackHandler` below produces depth-aware traces of
+agent / sub-agent / tool / LLM activity. It's used by both the Telegram
+bot (where it can also drive a transport for typing actions) and the
+local CLI (where the transport is omitted).
+"""
+
+from __future__ import annotations
 
 import logging
+import resource
 import time
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
+from uuid import UUID
 
 from langchain_core.callbacks import BaseCallbackHandler
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import BaseMessage, ToolMessage
 from langchain_core.outputs import LLMResult
 from telegram import Update
 
@@ -13,213 +24,379 @@ from .logging import truncate_log
 from .telegram import TelegramTransport
 
 
+@dataclass
+class _RunInfo:
+    """Per-run state tracked by the callback handler."""
+
+    kind: str  # "tool" | "llm" | "chain"
+    name: str
+    start: float
+    depth: int
+    extra: Dict[str, Any] = field(default_factory=dict)
+
+
+def _peak_rss_kb() -> int:
+    """Return peak resident set size in KB.
+
+    On Linux ``ru_maxrss`` is in kilobytes; on macOS it's in bytes. We
+    normalise to KB so the log line is consistent.
+    """
+    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    # Heuristic: if the value looks like bytes (>10MB-ish for any process
+    # would be > 10_000_000), assume bytes and convert.
+    if rss > 10_000_000:
+        rss = rss // 1024
+    return rss
+
+
 class ToolCallbackHandler(BaseCallbackHandler):
-    """Callback handler for logging tool usage in the agent."""
+    """Depth-aware callback handler for logging agent activity.
+
+    Tracks every run by its ``run_id`` so nested / concurrent calls are
+    timed and indented correctly. Renders log messages with Rich markup
+    for nicer terminal output (the project already wires a
+    ``RichHandler``).
+    """
 
     def __init__(
-        self, telegram_transport: TelegramTransport, update: Optional[Update] = None
+        self,
+        telegram_transport: Optional[TelegramTransport] = None,
+        update: Optional[Update] = None,
     ):
-        """
-        Initialize the callback handler.
-
-        Args:
-            telegram_transport: Telegram transport instance
-            update: Telegram update object (optional, can be set later)
-        """
         super().__init__()
         self.telegram_transport = telegram_transport
         self.update = update
         self.logger = logging.getLogger("scufris-bot.agent.tools")
 
-        # Track timing for tools and chains
-        self._tool_start_time: Optional[float] = None
-        self._tool_name: Optional[str] = None
-        self._llm_start_time: Optional[float] = None
+        # run_id -> _RunInfo
+        self._runs: Dict[UUID, _RunInfo] = {}
 
-    def set_update(self, update: Update) -> None:
-        """
-        Set the current update object for sending status actions.
+    # ------------------------------------------------------------------
+    # Public helpers
+    # ------------------------------------------------------------------
 
-        Args:
-            update: Telegram update object
-        """
+    def set_update(self, update: Optional[Update]) -> None:
         self.update = update
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _depth_for(self, parent_run_id: Optional[UUID]) -> int:
+        if parent_run_id is None:
+            return 0
+        parent = self._runs.get(parent_run_id)
+        if parent is None:
+            return 0
+        return parent.depth + 1
+
+    def _prefix(self, depth: int) -> str:
+        if depth == 0:
+            return ""
+        return "  " * (depth - 1) + "└─ "
+
+    def _register(
+        self,
+        run_id: UUID,
+        parent_run_id: Optional[UUID],
+        kind: str,
+        name: str,
+    ) -> _RunInfo:
+        info = _RunInfo(
+            kind=kind,
+            name=name,
+            start=time.time(),
+            depth=self._depth_for(parent_run_id),
+        )
+        self._runs[run_id] = info
+        return info
+
+    def _pop(self, run_id: UUID) -> Optional[_RunInfo]:
+        return self._runs.pop(run_id, None)
+
+    def _maybe_log_memory(self, info: _RunInfo) -> None:
+        """Log peak RSS once per top-level run."""
+        if info.depth != 0:
+            return
+        try:
+            rss_kb = _peak_rss_kb()
+            self.logger.debug(f"  peak RSS: {rss_kb / 1024:.1f} MB")
+        except Exception:  # pragma: no cover — never fail logging
+            pass
+
+    # ------------------------------------------------------------------
+    # Tool callbacks
+    # ------------------------------------------------------------------
 
     def on_tool_start(
         self,
         serialized: Dict[str, Any],
         input_str: str,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
     ) -> None:
-        """
-        Run when a tool starts running.
+        name = (serialized or {}).get("name", "unknown")
+        info = self._register(run_id, parent_run_id, "tool", name)
+        prefix = self._prefix(info.depth)
 
-        Args:
-            serialized: Serialized tool information
-            input_str: Input to the tool
-            **kwargs: Additional keyword arguments
-        """
-        self._tool_name = serialized.get("name", "unknown") if serialized else "unknown"
-        self._tool_start_time = time.time()
-
-        # Log detailed input at DEBUG level
-        self.logger.debug(
-            f"Tool '{self._tool_name}' started | input: {truncate_log(input_str, 200)}"
+        self.logger.info(
+            f"{prefix}[bold cyan]tool[/bold cyan] [bold]{name}[/bold] "
+            f"start | in={len(input_str)}c"
         )
+        self.logger.debug(f"{prefix}  input: {truncate_log(input_str, 500)}")
 
     def on_tool_end(
         self,
         output: ToolMessage,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
     ) -> None:
-        """
-        Run when a tool ends running.
+        info = self._pop(run_id)
+        if info is None:
+            # Unknown run — log minimally and bail.
+            self.logger.debug(f"tool end for unknown run_id={run_id}")
+            return
 
-        Args:
-            output: Output from the tool
-            **kwargs: Additional keyword arguments
-        """
-        # Calculate duration
-        duration = time.time() - self._tool_start_time if self._tool_start_time else 0
-
-        # Get output content
+        duration = time.time() - info.start
+        prefix = self._prefix(info.depth)
         output_content = (
             str(output.content) if hasattr(output, "content") else str(output)
         )
-        output_len = len(output_content)
-        status = getattr(output, "status", "unknown")
+        status = getattr(output, "status", "ok")
 
-        # Consolidated INFO log
         self.logger.info(
-            f"Tool '{self._tool_name}' completed | duration={duration:.2f}s | "
-            f"status={status} | output={output_len} chars"
+            f"{prefix}[bold cyan]tool[/bold cyan] [bold]{info.name}[/bold] "
+            f"done | [yellow]{duration:.2f}s[/yellow] | status={status} | "
+            f"out={len(output_content)}c"
         )
-
-        # Detailed output at DEBUG level
-        self.logger.debug(f"Tool output: {truncate_log(output_content, 500)}")
+        self.logger.debug(f"{prefix}  output: {truncate_log(output_content, 500)}")
+        self._maybe_log_memory(info)
 
     def on_tool_error(
         self,
-        error: Exception,
+        error: BaseException,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
     ) -> None:
-        """
-        Run when a tool errors.
-
-        Args:
-            error: The error that occurred
-            **kwargs: Additional keyword arguments
-        """
-        duration = time.time() - self._tool_start_time if self._tool_start_time else 0
+        info = self._pop(run_id)
+        duration = time.time() - info.start if info else 0.0
+        depth = info.depth if info else self._depth_for(parent_run_id)
+        name = info.name if info else "unknown"
+        prefix = self._prefix(depth)
         self.logger.error(
-            f"Tool '{self._tool_name}' failed | duration={duration:.2f}s | error: {str(error)}"
+            f"{prefix}[bold red]tool[/bold red] [bold]{name}[/bold] "
+            f"failed | [yellow]{duration:.2f}s[/yellow] | {error}"
         )
+
+    # ------------------------------------------------------------------
+    # LLM / chat-model callbacks
+    # ------------------------------------------------------------------
+
+    def _llm_name(self, serialized: Optional[Dict[str, Any]]) -> str:
+        if not serialized:
+            return "llm"
+        # langchain serialized payload usually has id=[..., "ChatOllama"]
+        ids = serialized.get("id")
+        if isinstance(ids, list) and ids:
+            return str(ids[-1])
+        return serialized.get("name", "llm")
 
     def on_llm_start(
         self,
         serialized: Dict[str, Any],
         prompts: List[str],
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
     ) -> None:
-        """
-        Run when LLM starts running.
+        name = self._llm_name(serialized)
+        info = self._register(run_id, parent_run_id, "llm", name)
+        prefix = self._prefix(info.depth)
+        self.logger.debug(
+            f"{prefix}[magenta]llm[/magenta] {name} start | prompts={len(prompts)}"
+        )
 
-        Args:
-            serialized: Serialized LLM information
-            prompts: Prompts sent to the LLM
-            **kwargs: Additional keyword arguments
-        """
-        self._llm_start_time = time.time()
-        self.logger.debug("LLM invoked")
+    def on_chat_model_start(
+        self,
+        serialized: Dict[str, Any],
+        messages: List[List[BaseMessage]],
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **kwargs: Any,
+    ) -> None:
+        name = self._llm_name(serialized)
+        info = self._register(run_id, parent_run_id, "llm", name)
+        prefix = self._prefix(info.depth)
+        msg_count = sum(len(batch) for batch in messages)
+        self.logger.debug(
+            f"{prefix}[magenta]llm[/magenta] {name} start | messages={msg_count}"
+        )
 
     def on_llm_end(
         self,
         response: LLMResult,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
     ) -> None:
-        """
-        Run when LLM ends running.
+        info = self._pop(run_id)
+        if info is None:
+            return
+        duration = time.time() - info.start
+        prefix = self._prefix(info.depth)
 
-        Args:
-            response: Response from the LLM
-            **kwargs: Additional keyword arguments
-        """
-        duration = time.time() - self._llm_start_time if self._llm_start_time else 0
-        self.logger.debug(f"LLM response received | duration={duration:.2f}s")
+        # Try to extract token usage from common locations.
+        tokens_str = ""
+        usage: Dict[str, Any] = {}
+        if response.llm_output:
+            usage = (
+                response.llm_output.get("token_usage")
+                or response.llm_output.get("usage")
+                or {}
+            )
+        # Modern AIMessage carries usage_metadata
+        if not usage:
+            for gen_list in response.generations:
+                for gen in gen_list:
+                    msg = getattr(gen, "message", None)
+                    meta = getattr(msg, "usage_metadata", None) if msg else None
+                    if meta:
+                        usage = dict(meta)
+                        break
+                if usage:
+                    break
+        if usage:
+            parts = []
+            for key in ("input_tokens", "prompt_tokens"):
+                if key in usage:
+                    parts.append(f"in={usage[key]}")
+                    break
+            for key in ("output_tokens", "completion_tokens"):
+                if key in usage:
+                    parts.append(f"out={usage[key]}")
+                    break
+            if "total_tokens" in usage:
+                parts.append(f"total={usage['total_tokens']}")
+            if parts:
+                tokens_str = " | tokens " + " ".join(parts)
+
+        self.logger.debug(
+            f"{prefix}[magenta]llm[/magenta] {info.name} done | "
+            f"[yellow]{duration:.2f}s[/yellow]{tokens_str}"
+        )
+
+    def on_llm_error(
+        self,
+        error: BaseException,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **kwargs: Any,
+    ) -> None:
+        info = self._pop(run_id)
+        duration = time.time() - info.start if info else 0.0
+        depth = info.depth if info else self._depth_for(parent_run_id)
+        prefix = self._prefix(depth)
+        self.logger.error(
+            f"{prefix}[bold red]llm[/bold red] failed | "
+            f"[yellow]{duration:.2f}s[/yellow] | {error}"
+        )
+
+    # ------------------------------------------------------------------
+    # Chain callbacks (low signal — DEBUG only, named chains only)
+    # ------------------------------------------------------------------
 
     def on_chain_start(
         self,
         serialized: Dict[str, Any],
         inputs: Dict[str, Any],
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
     ) -> None:
-        """
-        Run when a chain starts running.
-
-        Args:
-            serialized: Serialized chain information
-            inputs: Inputs to the chain
-            **kwargs: Additional keyword arguments
-        """
-        chain_name = serialized.get("name", "unknown") if serialized else "unknown"
-        self.logger.debug(f"Chain started: {chain_name}")
+        name = (serialized or {}).get("name") or ""
+        # Skip the unnamed wrapper chains LangChain emits for every step —
+        # they swamp the log without adding signal.
+        if not name or name in {"RunnableSequence", "RunnableLambda"}:
+            return
+        info = self._register(run_id, parent_run_id, "chain", name)
+        prefix = self._prefix(info.depth)
+        self.logger.debug(f"{prefix}[dim]chain[/dim] {name} start")
 
     def on_chain_end(
         self,
         outputs: Dict[str, Any],
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
     ) -> None:
-        """
-        Run when a chain ends running.
-
-        Args:
-            outputs: Outputs from the chain
-            **kwargs: Additional keyword arguments
-        """
-        self.logger.debug("Chain completed")
+        info = self._pop(run_id)
+        if info is None:
+            return
+        duration = time.time() - info.start
+        prefix = self._prefix(info.depth)
+        self.logger.debug(
+            f"{prefix}[dim]chain[/dim] {info.name} done | "
+            f"[yellow]{duration:.2f}s[/yellow]"
+        )
 
     def on_chain_error(
         self,
-        error: Exception,
+        error: BaseException,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
     ) -> None:
-        """
-        Run when a chain errors.
+        info = self._pop(run_id)
+        if info is None:
+            self.logger.error(f"chain error: {error}")
+            return
+        prefix = self._prefix(info.depth)
+        self.logger.error(
+            f"{prefix}[bold red]chain[/bold red] {info.name} failed | {error}"
+        )
 
-        Args:
-            error: The error that occurred
-            **kwargs: Additional keyword arguments
-        """
-        self.logger.error(f"Chain error: {str(error)}")
+    # ------------------------------------------------------------------
+    # Agent callbacks (DEBUG — informational only)
+    # ------------------------------------------------------------------
 
     def on_agent_action(
         self,
         action: Any,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
     ) -> None:
-        """
-        Run when an agent takes an action.
-
-        Args:
-            action: The action taken
-            **kwargs: Additional keyword arguments
-        """
-        tool_name = action.tool if hasattr(action, "tool") else "unknown"
-        tool_input = action.tool_input if hasattr(action, "tool_input") else {}
-
-        # Move to DEBUG level to reduce verbosity
-        self.logger.debug(f"Agent invoking tool '{tool_name}' | input: {tool_input}")
+        tool_name = getattr(action, "tool", "unknown")
+        tool_input = getattr(action, "tool_input", {})
+        depth = self._depth_for(parent_run_id)
+        prefix = self._prefix(depth)
+        self.logger.debug(
+            f"{prefix}[blue]agent[/blue] -> {tool_name} | "
+            f"input: {truncate_log(str(tool_input), 200)}"
+        )
 
     def on_agent_finish(
         self,
         finish: Any,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
         **kwargs: Any,
     ) -> None:
-        """
-        Run when an agent finishes.
-
-        Args:
-            finish: The finish information
-            **kwargs: Additional keyword arguments
-        """
-        self.logger.debug("Agent finished")
+        depth = self._depth_for(parent_run_id)
+        prefix = self._prefix(depth)
+        self.logger.debug(f"{prefix}[blue]agent[/blue] finished")

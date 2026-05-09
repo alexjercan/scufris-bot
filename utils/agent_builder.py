@@ -342,6 +342,8 @@ def create_sub_agent(
             else str(last_message)
         )
 
+        logger.debug(f"Sub-agent '{name}' returned {len(response_text)} chars")
+
         return response_text
 
     # Set the tool name and description
