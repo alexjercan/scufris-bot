@@ -10,11 +10,18 @@ from dotenv import load_dotenv
 class Config:
     """Configuration class for the Scufris Bot."""
 
-    def __init__(self):
-        """Initialize configuration by loading environment variables."""
+    def __init__(self, require_telegram: bool = True):
+        """Initialize configuration by loading environment variables.
+
+        Args:
+            require_telegram: If True (default), validates that Telegram
+                bot credentials are present. Set to False for local tools
+                like the CLI that don't need Telegram.
+        """
         load_dotenv()
 
         self.logger = logging.getLogger("scufris-bot.config")
+        self.require_telegram = require_telegram
 
         self.telegram_bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
         self.allowed_user_ids = self._parse_allowed_ids()
@@ -42,6 +49,9 @@ class Config:
 
     def _validate(self) -> None:
         """Validate required configuration values."""
+        if not self.require_telegram:
+            return
+
         if not self.telegram_bot_token:
             self.logger.critical(
                 "TELEGRAM_BOT_TOKEN not found in environment variables"
@@ -66,11 +76,15 @@ class Config:
         self.logger.info(f"Max history per user: {self.max_history_per_user}")
 
 
-def load_config() -> Config:
+def load_config(require_telegram: bool = True) -> Config:
     """
     Load and return the application configuration.
+
+    Args:
+        require_telegram: If False, do not require Telegram credentials.
+            Useful for local CLI tools.
 
     Returns:
         Config instance with loaded configuration
     """
-    return Config()
+    return Config(require_telegram=require_telegram)
