@@ -23,7 +23,7 @@ dependencies = [
 scufris-bot = "main:main"
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "editables"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
