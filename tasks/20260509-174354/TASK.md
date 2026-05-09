@@ -1,6 +1,6 @@
 # Phase 3.4c — Remove deprecated `/history` command
 
-- STATUS: DEFERRED
+- STATUS: CLOSED
 - PRIORITY: 30
 - TAGS: phase3,cli,telegram,cleanup
 
@@ -29,10 +29,10 @@ Reopen this task when:
 
 ## Acceptance criteria
 
-- [ ] `/history` is not registered anywhere; typing it in the CLI
+- [x] `/history` is not registered anywhere; typing it in the CLI
       yields the same "unknown command" path as e.g. `/foo`.
-- [ ] `HELP_TEXT` no longer mentions `/history`.
-- [ ] No regressions on `/stats` (existing 3.4 + 3.4b behaviour
+- [x] `HELP_TEXT` no longer mentions `/history`.
+- [x] No regressions on `/stats` (existing 3.4 + 3.4b behaviour
       preserved).
 
 ## Estimated effort
@@ -42,3 +42,25 @@ Reopen this task when:
 ## Dependencies
 
 - Hard-blocks-on **Phase 3.4b** (`tasks/20260509-172715`).
+
+## Implementation notes (post-hoc)
+
+- `cli.py`: removed the `/history` line from `HELP_TEXT` and the
+  whole `if cmd == "/history":` branch from `_handle_command`.
+- `main.py`: removed `history_stats` async handler and the
+  `CommandHandler("history", history_stats)` registration. Telegram
+  now silently ignores `/history` (standard "unknown command" path
+  for python-telegram-bot — no reply).
+- `README.md`: updated the example session and slash-commands
+  table to use `/stats` instead of `/history`.
+- Left task files (e.g. `tasks/20260509-172715`) untouched — their
+  references to `/history` are historical record.
+- Verified: `python -c "import main"` clean; `grep` for
+  `/history` and `history_stats` in `*.py` returns no matches.
+
+### Not done
+
+- Did not exercise the Telegram unknown-command path live; the
+  python-telegram-bot default behaviour (no reply) is well-known
+  and the AC was just "not registered anywhere", which is
+  satisfied structurally.

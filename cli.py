@@ -43,7 +43,6 @@ HELP_TEXT = """\
 Available commands:
   /help              Show this message
   /clear             Clear chat history for this session
-  /history           Show chat history stats
   /stats             Show per-agent memory breakdown
   /multiline         Toggle multiline input (end with a single '.' line)
   /thinking [full|short]
@@ -196,20 +195,6 @@ def _handle_command(
             base_url=settings["base_url"],
         )
         console.print("\n".join(lines))
-        return False, multiline
-
-    if cmd == "/history":
-        console.print(
-            "[dim][deprecated] /history will be removed; use /stats instead[/dim]"
-        )
-        count = history_manager.get_message_count(CLI_USER_ID)
-        stats = history_manager.get_stats()
-        console.print(
-            f"messages in this session: {count}\n"
-            f"max per user: {stats['max_history_per_user']}\n"
-            f"total users: {stats['total_users']}\n"
-            f"total messages: {stats['total_messages']}"
-        )
         return False, multiline
 
     if cmd == "/multiline":

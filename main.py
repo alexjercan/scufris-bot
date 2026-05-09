@@ -136,27 +136,6 @@ async def clear_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 @restricted(config.allowed_user_ids)
-async def history_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show chat history statistics (deprecated — use /stats)."""
-    user_info = telegram_transport.get_user_info(update)
-    user_id = user_info["id"]
-
-    message_count = history_manager.get_message_count(user_id)
-    stats = history_manager.get_stats()
-
-    stats_text = (
-        "⚠️ /history is deprecated; use /stats instead.\n\n"
-        f"📊 Chat History Stats\n\n"
-        f"Your messages: {message_count}\n"
-        f"Max per user: {stats['max_history_per_user']}\n"
-        f"Total users: {stats['total_users']}\n"
-        f"Total messages: {stats['total_messages']}"
-    )
-
-    await update.message.reply_text(stats_text)
-
-
-@restricted(config.allowed_user_ids)
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show per-agent memory + telemetry breakdown for the user."""
     user_info = telegram_transport.get_user_info(update)
@@ -181,7 +160,6 @@ def main():
 
     logger.info("Registering command handlers")
     app.add_handler(CommandHandler("clear", clear_history))
-    app.add_handler(CommandHandler("history", history_stats))
     app.add_handler(CommandHandler("stats", stats_command))
 
     logger.info("Registering message handlers")

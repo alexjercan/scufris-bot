@@ -42,8 +42,11 @@ Scufris CLI — type /help for commands, Ctrl-D on empty line to exit.
 ╭─ scufris ──────────────────────────────────────────────╮
 │ 4                                                      │
 ╰────────────────────────────────────────────────────────╯
-> /history
-messages in this session: 2
+> /stats
+Per-agent:
+  agent       model         memory  calls  last
+  ──────────  ────────────  ──────  ─────  ────
+  scufris     qwen3:latest  2 msgs      1  0s ago
 > /exit
 bye!
 ```
@@ -54,7 +57,7 @@ bye!
 | ------------ | ----------------------------------------------------------- |
 | `/help`      | List available commands                                     |
 | `/clear`     | Clear chat history for this session                         |
-| `/history`   | Show message count + history stats                          |
+| `/stats`     | Per-agent memory + telemetry breakdown                      |
 | `/multiline` | Toggle multiline input (end with a single `.` line)         |
 | `/exit`, `/quit` | Exit the REPL (Ctrl-D on an empty line works too)       |
 
