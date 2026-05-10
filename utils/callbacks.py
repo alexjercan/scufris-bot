@@ -147,7 +147,7 @@ class ThinkingEvent:
     assistant reply. The Telegram bot ignores them by default.
     """
 
-    kind: Literal["text", "tool_call", "tool_result", "tool_meta"]
+    kind: Literal["text", "tool_call", "tool_result", "tool_meta", "compaction"]
     source: str  # e.g. "main", "knowledge_agent" (raw technical name)
     text: str  # for tool_call: target tool name; for text: the message
     depth: int  # nesting level (for indentation/styling)
@@ -157,6 +157,12 @@ class ThinkingEvent:
     # the count of prior history turns the sub-agent loaded for THIS
     # call (>0 only). The CLI renders it as `↳ +N prior turns`.
     prior_turns: Optional[int] = None
+    # Phase 3 — for `compaction` events: how many messages were
+    # evicted in the salvage and how many new facts were extracted.
+    # Both >0 (the history manager only emits when something was
+    # actually salvaged).
+    evicted: Optional[int] = None
+    new_facts: Optional[int] = None
 
 
 # Type alias for the on_thinking callback.

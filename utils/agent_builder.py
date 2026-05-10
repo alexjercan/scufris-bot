@@ -35,6 +35,7 @@ from .tools import (
     web_search_tool,
     weight_entry_tool,
 )
+from .tools.memory_tools import make_memory_tools
 
 # =============================================================================
 # System Prompts
@@ -167,6 +168,13 @@ Sub-agent returns: `cannot_handle: weather lookups belong to knowledge_agent`
 - Concise, helpful, conversational. Plain language over jargon.
 - Confirm successful actions in one short sentence; don't narrate every step.
 - When you don't know something and can't find out, say so plainly.
+
+## Durable memory: `remember` / `forget`
+
+You have two tools for writing facts you'd like to recall in future turns:
+`remember(key, value)` and `forget(key)`. Use short slot keys
+(e.g. `remember("location", "Bucharest")`). If the user retracts a fact, call
+`forget`; do not just stop using it.
 """
 
 CODING_AGENT_PROMPT = f"""You are the coding sub-agent for Scufris Bot.
@@ -192,6 +200,13 @@ modifications, and explaining code or technical concepts.
   what or where, refuse with `cannot_handle: need a target file or symbol`
   rather than guessing at random.
 
+## Durable memory: `remember` / `forget`
+
+You may call `remember(key, value)` to durably store a coding-context fact
+for future calls (e.g. `remember("project_path", "/home/alex/foo")`), and
+`forget(key)` to drop one. If the user retracts a fact, call `forget`; do
+not just stop using it.
+
 {SUB_AGENT_MEMORY_CONTEXT}"""
 
 KNOWLEDGE_AGENT_PROMPT = f"""You are the knowledge sub-agent for Scufris Bot.
@@ -215,6 +230,13 @@ that change over time, and weather.
 - If the query is opinion, advice, or anything that doesn't need an external
   source, refuse with `cannot_handle: not an information-lookup task` so
   Scufris can answer directly.
+
+## Durable memory: `remember` / `forget`
+
+Call `remember(key, value)` to durably store a lookup-context fact for
+future calls (e.g. `remember("location", "Bucharest")`), and `forget(key)`
+to drop one. If the user retracts a fact, call `forget`; do not just stop
+using it.
 
 {SUB_AGENT_MEMORY_CONTEXT}"""
 
@@ -295,6 +317,13 @@ When the user says "add a note about X", format the entry as:
 
 The `note :: TAG` line first, blank line, then content. Tags drive `notes_filter_tool`.
 
+## Durable memory: `remember` / `forget`
+
+Call `remember(key, value)` to durably store a journal-context fact for
+future calls (e.g. `remember("daily_calorie_target", "2200")`), and
+`forget(key)` to drop one. If the user retracts a fact, call `forget`; do
+not just stop using it.
+
 {SUB_AGENT_MEMORY_CONTEXT}"""
 
 
@@ -368,8 +397,16 @@ def create_sub_agent(
         temperature=config.ollama_temperature,
     )
 
+    # Phase 3: history-keeping agents get per-slice `remember` /
+    # `forget` tools so they can write durable facts to their own
+    # store. Stateless agents (utilities_agent) skip this — facts
+    # without a slice make no sense.
+    effective_tools = list(tools)
+    if keeps_history and history_manager is not None:
+        effective_tools.extend(make_memory_tools(history_manager, name))
+
     # Create the agent
-    agent = create_agent(llm, tools=tools, system_prompt=system_prompt)
+    agent = create_agent(llm, tools=effective_tools, system_prompt=system_prompt)
 
     # Define the tool function that wraps the agent
     @tool
@@ -440,7 +477,15 @@ def create_sub_agent(
             user_content = query
 
         user_turn = HumanMessage(content=user_content)
-        input_messages = [*prior, user_turn]
+        # Phase 2: prepend the slice's compaction context (summary +
+        # facts as SystemMessages) so the sub-agent sees what was
+        # salvaged from earlier turns. Empty when the slice has no
+        # compacted state yet — keeps cold-start prompts identical
+        # to Phase 1.
+        context_msgs: List = []
+        if keeps_history and history_manager is not None and user_id is not None:
+            context_msgs = history_manager.build_context_messages(user_id, agent=name)
+        input_messages = [*context_msgs, *prior, user_turn]
 
         # IMPORTANT: do NOT forward the injected `config` to the inner
         # `agent.invoke`. The `config` that `@tool` hands us is the
@@ -747,10 +792,16 @@ def setup_scufris(
         temperature=config.ollama_temperature,
     )
 
-    # Create the main agent
+    # Create the main agent. The main flow keeps history (under the
+    # "scufris" slice), so it also gets `remember` / `forget` tools
+    # bound to that slice (Phase 3).
+    main_agent_tools_with_memory = [
+        *main_agent_tools,
+        *make_memory_tools(history_manager, SCUFRIS_AGENT),
+    ]
     main_agent = create_agent(
         llm,
-        tools=main_agent_tools,
+        tools=main_agent_tools_with_memory,
         system_prompt=MAIN_AGENT_PROMPT,
     )
 

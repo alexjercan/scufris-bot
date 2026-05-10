@@ -23,6 +23,7 @@ from utils import (
     ThinkingEvent,
     ToolCallbackHandler,
     create_agent_manager,
+    create_compactor,
     create_history_manager,
     display_name,
     is_sub_agent,
@@ -268,7 +269,9 @@ def main() -> None:
         logger = setup_logging(default_level=logging.DEBUG)
     config = load_config(require_telegram=False)
 
-    history_manager = create_history_manager(config.max_history_per_user)
+    history_manager = create_history_manager(
+        config.max_history_per_user, compactor=create_compactor()
+    )
     main_agent = setup_scufris(config=config, history_manager=history_manager)
 
     console = Console()
@@ -323,6 +326,15 @@ def main() -> None:
                 console.print(
                     f"{indent}  [grey50]↳ +{ev.prior_turns} prior turns[/grey50]"
                 )
+        elif ev.kind == "compaction":
+            # Phase 3 — single-line gray status surfaced from the
+            # history manager when the compactor salvaged something.
+            n_msg = ev.evicted or 0
+            n_facts = ev.new_facts or 0
+            console.print(
+                f"[grey50][memory] {ev.source}: compacted {n_msg} msg(s), "
+                f"+{n_facts} fact(s)[/grey50]"
+            )
         elif ev.kind == "text":
             # In `short` mode, keep the chat scannable; full text is also
             # in the DEBUG log. In `full` mode, print everything verbatim.
@@ -340,6 +352,8 @@ def main() -> None:
     # Register the callback handler so we get the same depth-aware
     # tool/sub-agent/LLM trace as the Telegram bot. No transport needed.
     callback_handler = ToolCallbackHandler(on_thinking=render_thinking)
+    # Phase 3: route compaction events through the same renderer.
+    history_manager.set_event_sink(render_thinking)
     agent_manager = create_agent_manager(
         agent=main_agent,
         callbacks=[callback_handler],

@@ -87,7 +87,7 @@ def format_stats_lines(
 
         # Build all rows up front so we can compute column widths from
         # the actual rendered cell contents (memory cell varies a lot).
-        header = ("agent", "model", "memory", "calls", "last")
+        header = ("agent", "model", "memory", "summary", "facts", "calls", "last")
         rows: List[tuple] = [header]
         for agent, t in ordered:
             model_cell = t.get("model") or "—"
@@ -108,7 +108,27 @@ def format_stats_lines(
                 else:
                     memory_cell = f"{msgs} msgs / ~{tokens} tok"
 
-            rows.append((agent, model_cell, memory_cell, calls_cell, last_cell))
+            # Phase 3: compaction visibility. "—" for stateless agents
+            # (no slice = no possible summary/facts) so the column reads
+            # as "not applicable" rather than a misleading 0.
+            if t["history_disabled"]:
+                summary_cell = "—"
+                facts_cell = "—"
+            else:
+                summary_cell = f"{t.get('summary_chars', 0)}ch"
+                facts_cell = str(t.get("facts_count", 0))
+
+            rows.append(
+                (
+                    agent,
+                    model_cell,
+                    memory_cell,
+                    summary_cell,
+                    facts_cell,
+                    calls_cell,
+                    last_cell,
+                )
+            )
 
         # Compute width per column from the data (header included).
         widths = [max(len(row[i]) for row in rows) for i in range(len(header))]
@@ -117,13 +137,15 @@ def format_stats_lines(
         gutter = "  "
 
         def fmt_row(row: tuple) -> str:
-            agent_c, model_c, mem_c, calls_c, last_c = row
+            agent_c, model_c, mem_c, sum_c, fac_c, calls_c, last_c = row
             return (
                 f"  {agent_c:<{widths[0]}}{gutter}"
                 f"{model_c:<{widths[1]}}{gutter}"
                 f"{mem_c:<{widths[2]}}{gutter}"
-                f"{calls_c:>{widths[3]}}{gutter}"
-                f"{last_c:<{widths[4]}}"
+                f"{sum_c:>{widths[3]}}{gutter}"
+                f"{fac_c:>{widths[4]}}{gutter}"
+                f"{calls_c:>{widths[5]}}{gutter}"
+                f"{last_c:<{widths[6]}}"
             ).rstrip()
 
         lines.append(fmt_row(header))

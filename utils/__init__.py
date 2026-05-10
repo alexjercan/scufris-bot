@@ -12,6 +12,14 @@ from .callbacks import (
 from .config import Config, load_config
 from .history import SCUFRIS_AGENT, ChatHistoryManager, create_history_manager
 from .logging import get_logger, setup_logging, truncate_log
+from .memory_compactor import (
+    CompactionResult,
+    Compactor,
+    FactEntry,
+    LLMCompactor,
+    NoopCompactor,
+    create_compactor,
+)
 from .telegram import TelegramTransport, restricted
 
 __all__ = [
@@ -28,6 +36,12 @@ __all__ = [
     "ChatHistoryManager",
     "create_history_manager",
     "SCUFRIS_AGENT",
+    "Compactor",
+    "CompactionResult",
+    "FactEntry",
+    "LLMCompactor",
+    "NoopCompactor",
+    "create_compactor",
     "setup_logging",
     "get_logger",
     "truncate_log",

@@ -15,6 +15,7 @@ from utils import (
     TelegramTransport,
     ToolCallbackHandler,
     create_agent_manager,
+    create_compactor,
     create_history_manager,
     load_config,
     restricted,
@@ -28,7 +29,9 @@ from utils.telemetry import begin_turn
 logger = setup_logging(default_level=logging.INFO)
 config = load_config()
 telegram_transport = TelegramTransport(config.allowed_user_ids)
-history_manager = create_history_manager(config.max_history_per_user)
+history_manager = create_history_manager(
+    config.max_history_per_user, compactor=create_compactor()
+)
 
 # Captured once at process start so /stats can show uptime.
 session_started_at = datetime.now(timezone.utc)

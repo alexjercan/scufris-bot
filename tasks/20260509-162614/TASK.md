@@ -1,6 +1,6 @@
 # History compaction spike: sliding window + summary + user-facts hashmap
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 20
 - TAGS: spike,memory,research
 
@@ -451,8 +451,35 @@ Phase 4 (out of v1 scope, file only when needed):
 - [x] Implementation cost estimated (medium, 2–3 days).
 - [x] At least two adversarial scenarios stress-tested (five
       documented above).
-- [ ] User reviews findings and either approves the implementation
-      plan, requests revisions, or rejects with reasoning.
-- [ ] On approval: file the three implementation tasks, then mark
-      this spike `STATUS: CLOSED`.
+- [x] User reviewed findings and approved the implementation plan.
+- [x] Implementation tasks filed; spike closed.
+
+## Postscript (closure)
+
+User approved the design 2026-05-10 and asked for the work to be
+broken into smaller tatr tasks before implementation. Three phase
+tasks filed, one per phase from the implementation plan above:
+
+- **Phase 1** — `tasks/20260510-183121` (pri 22): Compactor
+  Protocol + `NoopCompactor` + `_summaries`/`_facts` storage +
+  eviction wiring. Behaviour-preserving (no LLM, no prompt
+  changes).
+- **Phase 2** — `tasks/20260510-183123` (pri 21): `LLMCompactor`
+  with conservative prompt + summary/facts injection into
+  `get_history_with_new_message` and the sub-agent assembly path.
+  Bootstrap switches default from `Noop` to `LLM`.
+  `SCUFRIS_COMPACTOR=noop` env opt-out for A/B.
+- **Phase 3** — `tasks/20260510-183107` (pri 20):
+  `remember`/`forget` tools wired into every history-keeping
+  agent + `ThinkingEvent.compaction` variant + CLI rendering +
+  `/stats` columns.
+
+Backward-compatibility commitment carried into all three tasks:
+adding context to a prompt should be neutral or positive — never a
+regression. Phase 1 is provably neutral (Noop returns empty);
+Phase 2 only injects when content is non-empty; Phase 3 is purely
+additive (new tools, new event variant, new columns).
+
+This spike's purpose (research the design, file implementation
+tasks) is fulfilled. Closing.
 
