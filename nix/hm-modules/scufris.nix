@@ -2,13 +2,18 @@
 #
 # Mirrors the option layout of `nixosModules.scufris` so users can move
 # between system-wide and per-user installs without relearning.
-{
+#
+# Closes over the flake's `self` so the default `package` options
+# resolve via `self.packages.${system}.<name>` rather than requiring
+# the consumer to inject a `pkgs.scufris-*` overlay.
+{self}: {
   config,
   lib,
   pkgs,
   ...
 }: let
   cfg = config.programs.scufris;
+  flakePkgs = self.packages.${pkgs.system};
 
   serverEnv =
     {
@@ -37,8 +42,8 @@ in {
 
     package = lib.mkOption {
       type = lib.types.package;
-      default = pkgs.scufris-cli;
-      defaultText = lib.literalExpression "pkgs.scufris-cli";
+      default = flakePkgs.scufris-cli;
+      defaultText = lib.literalExpression "scufris.packages.\${system}.scufris-cli";
       description = "The scufris-cli package to install.";
     };
 
@@ -64,8 +69,8 @@ in {
 
       package = lib.mkOption {
         type = lib.types.package;
-        default = pkgs.scufris-server;
-        defaultText = lib.literalExpression "pkgs.scufris-server";
+        default = flakePkgs.scufris-server;
+        defaultText = lib.literalExpression "scufris.packages.\${system}.scufris-server";
         description = "The scufris-server package to run as a user service.";
       };
 
