@@ -45,7 +45,10 @@ class AgentManager:
         self.logger.info(f"Loaded {len(self.callbacks)} callback handler(s)")
 
     async def process_message(
-        self, messages: List[Dict[str, str]], user_id: int
+        self,
+        messages: List[Dict[str, str]],
+        user_id: int,
+        extra_callbacks: Optional[List[BaseCallbackHandler]] = None,
     ) -> str:
         """
         Process messages through the agent and return the response.
@@ -56,6 +59,9 @@ class AgentManager:
             user_id: Caller's user ID. Threaded into ``configurable`` so
                 sub-agent tools can load the right per-(user, agent)
                 history slice. See Phase 3.2 / Phase 3.3.
+            extra_callbacks: Optional per-request callback handlers (e.g. an
+                SSE stream's own ``ToolCallbackHandler``). Merged with the
+                manager-level callbacks for this single invocation.
 
         Returns:
             The agent's response text
@@ -72,16 +78,32 @@ class AgentManager:
         if self.history_manager is not None:
             self.history_manager.record_invocation(user_id, SCUFRIS_AGENT)
 
+        callbacks: List[BaseCallbackHandler] = list(self.callbacks)
+        if extra_callbacks:
+            callbacks.extend(extra_callbacks)
+
         # Invoke the agent with callbacks. ``configurable.user_id`` is
         # propagated by LangChain to every nested runnable, including
         # sub-agent tools that need it to key their history.
-        response = self.agent.invoke(
-            {"messages": messages},
-            config={
-                "callbacks": self.callbacks,
-                "configurable": {"user_id": user_id},
-            },
-        )
+        #
+        # Prefer the async path so the FastAPI event loop isn't blocked;
+        # fall back to running the sync .invoke in a worker thread for
+        # agent runnables that don't implement ainvoke.
+        config: Dict[str, Any] = {
+            "callbacks": callbacks,
+            "configurable": {"user_id": user_id},
+        }
+        ainvoke = getattr(self.agent, "ainvoke", None)
+        if callable(ainvoke):
+            response = await ainvoke({"messages": messages}, config=config)
+        else:
+            import asyncio
+
+            response = await asyncio.to_thread(
+                self.agent.invoke,
+                {"messages": messages},
+                config=config,  # type: ignore[arg-type]
+            )
 
         response_text = self._extract_response_text(response)
 
