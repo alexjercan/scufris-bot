@@ -1,0 +1,70 @@
+name: ci
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Fast feedback: lint + type-check + unit tests via the dev shell.
+  # Runs the same commands a developer would run locally, against the
+  # same pinned environment.
+  lint-and-test:
+    name: lint + type + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@main
+
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: ruff
+        run: nix develop --command ruff check .
+
+      - name: mypy
+        run: nix develop --command mypy .
+
+      - name: pytest
+        run: nix develop --command pytest -q
+
+  # `nix build` for both user-facing entrypoints. Catches packaging
+  # regressions that the dev-shell job would miss (eg. missing runtime
+  # dep in the closure).
+  build:
+    name: nix build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@main
+
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: build scufris-server
+        run: nix build -L .#scufris-server
+
+      - name: build scufris-cli
+        run: nix build -L .#scufris-cli
+
+  # Full flake check: re-runs ruff/mypy/pytest in sandboxed derivations
+  # and runs the NixOS VM test (boots a VM, hits /v1/healthz, asserts
+  # the systemd-analyze security score). Intentionally separate from
+  # `lint-and-test` so the fast-feedback job isn't blocked by the
+  # multi-minute VM boot.
+  flake-check:
+    name: nix flake check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@main
+
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: nix flake check
+        run: nix flake check -L

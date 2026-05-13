@@ -1,5 +1,7 @@
 # Scufris
 
+[![CI](https://github.com/alexjercan/scufris-bot/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/alexjercan/scufris-bot/actions/workflows/ci.yml)
+
 Scuffed Jarvis — a personal assistant bot powered by an Ollama-backed
 LangChain agent hierarchy, exposed both as a Telegram bot and a local CLI.
 

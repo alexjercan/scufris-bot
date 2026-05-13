@@ -1,6 +1,6 @@
 # GitHub Actions CI: ruff, pytest, mypy, nix flake check
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 55
 - TAGS: ci
 
