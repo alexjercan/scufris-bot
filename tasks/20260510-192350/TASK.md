@@ -1,6 +1,6 @@
 # Deployment spike: HTTP server architecture for scufris daemon
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 90
 - TAGS: deploy, design, server, spike
 

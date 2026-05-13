@@ -1,6 +1,6 @@
 # Implement scufris HTTP server (daemon entrypoint)
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 80
 - TAGS: deploy, server
 
