@@ -1,15 +1,30 @@
-"""Local REPL-style CLI for the Scufris agent.
+"""Local REPL CLI for the Scufris agent — HTTP client of ``scufris-server``.
 
-Lets you chat with the bot from a terminal without needing to deploy to
-Telegram. Uses readline for line editing and rich for pretty output.
+The bot's brain (agent runtime, history, tools) lives in the daemon; this
+module is just the terminal UX. Killing and restarting the CLI doesn't
+evict your conversation — that lives in the daemon.
 
-Run with:  uv run scufris-cli   (or: python cli.py)
+Connection settings:
+  * ``SCUFRIS_SERVER_URL`` — base URL of the daemon
+    (default ``http://127.0.0.1:8765``).
+  * ``SCUFRIS_TOKEN`` — bearer token, only required when the server is
+    configured with one.
+  * ``SCUFRIS_USER`` — string identity used to derive a stable user id;
+    falls back to ``getpass.getuser()``.
+  * ``SCUFRIS_USER_ID`` — explicit integer override (wins over
+    ``SCUFRIS_USER``).
+  * ``SCUFRIS_FULL_THINKING`` — start in full-thinking render mode (default).
+
+Run with:  uv run scufris-cli
 """
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import atexit
+import logging
+import os
 import readline
 import time
 from datetime import datetime, timezone
@@ -19,24 +34,21 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 
+from scufris_client import (
+    ScufrisAuthError,
+    ScufrisClient,
+    ScufrisConnectionError,
+    ScufrisError,
+    ScufrisServerError,
+    user_id_for,
+)
 from utils import (
     ThinkingEvent,
-    ToolCallbackHandler,
-    create_agent_manager,
-    create_compactor,
-    create_history_manager,
     display_name,
     is_sub_agent,
-    load_config,
     setup_logging,
-    setup_scufris,
     truncate_log,
 )
-from utils.stats import format_stats_lines
-from utils.telemetry import begin_turn
-
-# Pseudo user id used to scope history within the CLI session.
-CLI_USER_ID = 0
 
 HISTORY_FILE = Path.home() / ".scufris_cli_history"
 
@@ -61,16 +73,18 @@ Anything else you type is sent to the agent.
 THINKING_SHORT_LIMIT = 240
 
 
+# ----------------------------------------------------------------------
+# Readline plumbing (unchanged from the legacy CLI)
+# ----------------------------------------------------------------------
+
+
 def _setup_readline() -> None:
-    """Wire up persistent readline history."""
     try:
         readline.read_history_file(HISTORY_FILE)
     except FileNotFoundError:
         pass
     except OSError:
-        # Corrupt history file or permission issue — ignore.
         pass
-
     readline.set_history_length(1000)
     atexit.register(_save_readline_history)
 
@@ -83,21 +97,13 @@ def _save_readline_history() -> None:
 
 
 def _read_input(console: Console, multiline: bool) -> str | None:
-    """Read a single user message from stdin.
-
-    Returns None on EOF (Ctrl-D on empty input) so the caller can exit.
-    """
     prompt = "[bold cyan]>[/bold cyan] "
-    # rich's input() integrates nicely with readline.
     try:
         first = console.input(prompt)
     except EOFError:
         return None
-
     if not multiline:
         return first
-
-    # Multiline mode: keep collecting until a line that is just "." (or EOF).
     lines = [first]
     while True:
         try:
@@ -110,63 +116,138 @@ def _read_input(console: Console, multiline: bool) -> str | None:
     return "\n".join(lines)
 
 
+# ----------------------------------------------------------------------
+# Thinking renderer — same shape as the legacy CLI so the visual output
+# is identical. We just feed it ThinkingEvents from the SSE stream.
+# ----------------------------------------------------------------------
+
+
+def make_render_thinking(console: Console, settings: dict):
+    def render_thinking(ev: ThinkingEvent) -> None:
+        indent = "  " * ev.depth
+        src = display_name(ev.source)
+        if ev.kind == "tool_call":
+            target = display_name(ev.text)
+            verb = "asks" if is_sub_agent(ev.text) else "uses"
+            line = f"{indent}→ [cyan]{src}[/cyan] {verb} [bold]{target}[/bold]"
+            if ev.arg:
+                line += f": [grey50]{ev.arg}[/grey50]"
+            console.print(line)
+            if ev.context:
+                ctx = ev.context.replace("\n", " ")
+                if not settings.get("full_thinking"):
+                    ctx = truncate_log(ctx, THINKING_SHORT_LIMIT)
+                console.print(f"{indent}  [grey50]↳ context: {ctx}[/grey50]")
+        elif ev.kind == "tool_meta":
+            if ev.prior_turns and ev.prior_turns > 0:
+                console.print(
+                    f"{indent}  [grey50]↳ +{ev.prior_turns} prior turns[/grey50]"
+                )
+        elif ev.kind == "compaction":
+            n_msg = ev.evicted or 0
+            n_facts = ev.new_facts or 0
+            console.print(
+                f"[grey50][memory] {ev.source}: compacted {n_msg} msg(s), "
+                f"+{n_facts} fact(s)[/grey50]"
+            )
+        elif ev.kind == "text":
+            text = ev.text.replace("\n", " ")
+            if not settings.get("full_thinking"):
+                text = truncate_log(text, THINKING_SHORT_LIMIT)
+            console.print(f"{indent}[cyan]{src}[/cyan] [grey50]{text}[/grey50]")
+        else:  # tool_result — currently unused, kept for completeness
+            text = ev.text.replace("\n", " ")
+            if not settings.get("full_thinking"):
+                text = truncate_log(text, THINKING_SHORT_LIMIT)
+            console.print(f"{indent}[grey50]↩ {text}[/grey50]")
+
+    return render_thinking
+
+
+# ----------------------------------------------------------------------
+# Per-turn handler — drives the SSE stream into the renderer.
+# ----------------------------------------------------------------------
+
+
 async def _handle_message(
     console: Console,
-    agent_manager,
-    history_manager,
+    client: ScufrisClient,
+    user_id: int,
     user_message: str,
-    logger,
+    render_thinking,
+    logger: logging.Logger,
 ) -> None:
-    """Send a single user message through the agent and render the reply."""
     request_start = time.time()
-    logger.info(f"User CLI: {truncate_log(user_message, 100)}")
+    logger.debug(f"User CLI: {truncate_log(user_message, 100)}")
 
+    final_text: str | None = None
+    error_text: str | None = None
     try:
-        messages = history_manager.get_history_with_new_message(
-            CLI_USER_ID, user_message
-        )
-
-        process_start = time.time()
-        with begin_turn(f"cli:{CLI_USER_ID}"):
-            response_text = await agent_manager.process_message(messages, CLI_USER_ID)
-        process_duration = time.time() - process_start
-
-        history_manager.add_user_message(CLI_USER_ID, user_message)
-        history_manager.add_ai_message(CLI_USER_ID, response_text)
-
-        total_duration = time.time() - request_start
-        logger.info(
-            f"CLI request done | total={total_duration:.2f}s "
-            f"(process={process_duration:.2f}s) | response={len(response_text)} chars"
-        )
-
+        async for ev in client.chat_stream(user_id, user_message):
+            if ev.kind == "thinking" and ev.thinking is not None:
+                render_thinking(ev.thinking)
+            elif ev.kind == "done":
+                final_text = ev.text or ""
+            elif ev.kind == "error":
+                error_text = ev.error or "unknown error"
+                break
+    except ScufrisConnectionError as exc:
         console.print(
-            Panel(
-                Markdown(response_text),
-                title="[bold green]scufris[/bold green]",
-                border_style="green",
-            )
+            f"[bold red]server unreachable:[/bold red] {exc}\n"
+            "[dim]hint: is `scufris-server` running and is "
+            "$SCUFRIS_SERVER_URL set correctly?[/dim]"
         )
-    except Exception as e:  # noqa: BLE001 — surface anything to the user
-        logger.error(f"Error processing CLI message: {e}", exc_info=True)
-        console.print(f"[bold red]error:[/bold red] {e}")
+        return
+    except ScufrisAuthError as exc:
+        console.print(
+            f"[bold red]auth failed:[/bold red] {exc}\n"
+            "[dim]hint: check $SCUFRIS_TOKEN[/dim]"
+        )
+        return
+    except ScufrisServerError as exc:
+        console.print(f"[bold red]server error:[/bold red] {exc}")
+        return
+    except asyncio.CancelledError:
+        # Ctrl-C during the stream. Closing the generator above tears
+        # down the SSE connection, which the server treats as a cancel.
+        console.print("[yellow]interrupted — server canceled[/yellow]")
+        return
+
+    total_duration = time.time() - request_start
+    if error_text is not None:
+        console.print(f"[bold red]error:[/bold red] {error_text}")
+        return
+    if final_text is None:
+        console.print("[bold red]stream ended without a `done` event[/bold red]")
+        return
+
+    logger.debug(
+        f"CLI request done | total={total_duration:.2f}s | "
+        f"response={len(final_text)} chars"
+    )
+    console.print(
+        Panel(
+            Markdown(final_text),
+            title="[bold green]scufris[/bold green]",
+            border_style="green",
+        )
+    )
 
 
-def _handle_command(
+# ----------------------------------------------------------------------
+# Slash commands.
+# ----------------------------------------------------------------------
+
+
+async def _handle_command(
     console: Console,
-    history_manager,
+    client: ScufrisClient,
+    user_id: int,
     cmd: str,
     multiline: bool,
     settings: dict,
 ) -> tuple[bool, bool]:
-    """Handle a /slash command.
-
-    `settings` is a mutable dict shared with the rest of the REPL —
-    used here so `/thinking` can flip rendering state in place without
-    threading a callback through every layer.
-
-    Returns (should_exit, new_multiline_state).
-    """
+    """Handle a /slash command. Returns (should_exit, new_multiline)."""
     cmd = cmd.strip()
     if cmd in ("/exit", "/quit"):
         return True, multiline
@@ -176,28 +257,32 @@ def _handle_command(
         return False, multiline
 
     if cmd == "/clear":
-        breakdown = history_manager.get_user_breakdown(CLI_USER_ID)
-        total = history_manager.clear_history(CLI_USER_ID)
-        if total == 0:
+        try:
+            result = await client.clear(user_id)
+        except ScufrisError as exc:
+            console.print(f"[bold red]clear failed:[/bold red] {exc}")
+            return False, multiline
+        cleared = result.get("cleared", 0)
+        breakdown = result.get("breakdown") or {}
+        if cleared == 0:
             console.print("[yellow]no messages to clear[/yellow]")
         elif breakdown:
             breakdown_str = ", ".join(f"{a}: {n}" for a, n in sorted(breakdown.items()))
             console.print(
-                f"[yellow]cleared {total} messages ({breakdown_str})[/yellow]"
+                f"[yellow]cleared {cleared} messages ({breakdown_str})[/yellow]"
             )
         else:
-            console.print(f"[yellow]cleared {total} messages[/yellow]")
+            console.print(f"[yellow]cleared {cleared} messages[/yellow]")
         return False, multiline
 
     if cmd == "/stats":
-        lines = format_stats_lines(
-            history_manager,
-            CLI_USER_ID,
-            started_at=settings["started_at"],
-            model=settings["model"],
-            base_url=settings["base_url"],
-        )
-        console.print("\n".join(lines))
+        try:
+            result = await client.stats(user_id)
+        except ScufrisError as exc:
+            console.print(f"[bold red]stats failed:[/bold red] {exc}")
+            return False, multiline
+        for line in result.get("lines", []):
+            console.print(line)
         return False, multiline
 
     if cmd == "/multiline":
@@ -210,36 +295,122 @@ def _handle_command(
         return False, new_state
 
     if cmd.startswith("/thinking"):
-        parts = cmd.split(maxsplit=1)
-        arg = parts[1].strip().lower() if len(parts) > 1 else ""
-        if arg == "full":
-            settings["full_thinking"] = True
-        elif arg in ("short", "truncate", "off"):
-            settings["full_thinking"] = False
-        elif arg == "":
-            # No arg = toggle.
-            settings["full_thinking"] = not settings.get("full_thinking", False)
-        else:
-            console.print(
-                f"[red]unknown /thinking arg:[/red] {arg}  (use 'full' or 'short')"
-            )
+        parts = cmd.split()
+        if len(parts) == 1:
+            mode = "full" if settings.get("full_thinking") else "short"
+            console.print(f"[yellow]thinking mode: {mode}[/yellow]")
             return False, multiline
-        mode = "full" if settings["full_thinking"] else "short"
-        console.print(f"[yellow]thinking mode: {mode}[/yellow]")
+        choice = parts[1].lower()
+        if choice == "full":
+            settings["full_thinking"] = True
+        elif choice == "short":
+            settings["full_thinking"] = False
+        else:
+            console.print(f"[red]unknown thinking mode: {choice}[/red]")
+            return False, multiline
+        console.print(f"[yellow]thinking mode set to {choice}[/yellow]")
         return False, multiline
 
-    console.print(f"[red]unknown command:[/red] {cmd}  (try /help)")
+    console.print(f"[red]unknown command: {cmd}[/red] — try /help")
     return False, multiline
 
 
-def main() -> None:
-    import argparse
-    import logging
-    import os
+# ----------------------------------------------------------------------
+# Entrypoint.
+# ----------------------------------------------------------------------
 
+
+async def _amain(args: argparse.Namespace) -> None:
+    if args.quiet:
+        logger = setup_logging(level=logging.ERROR)
+    else:
+        logger = setup_logging(default_level=logging.INFO)
+
+    base_url = os.environ.get("SCUFRIS_SERVER_URL", "http://127.0.0.1:8765")
+    token = os.environ.get("SCUFRIS_TOKEN")
+    user_id = user_id_for()
+
+    console = Console()
+    _setup_readline()
+
+    if args.short_thinking:
+        full_thinking = False
+    else:
+        full_env = os.environ.get("SCUFRIS_FULL_THINKING", "").lower()
+        full_thinking = full_env not in ("0", "false", "no", "off")
+    settings: dict = {
+        "full_thinking": full_thinking,
+        "started_at": datetime.now(timezone.utc),
+    }
+    render_thinking = make_render_thinking(console, settings)
+
+    console.print(
+        f"[bold]Scufris CLI[/bold] → [dim]{base_url}[/dim] "
+        f"as [dim]user {user_id}[/dim] — type [bold]/help[/bold] for "
+        "commands, [bold]Ctrl-D[/bold] on empty line to exit."
+    )
+
+    multiline = False
+    async with ScufrisClient(base_url=base_url, token=token) as client:
+        # Probe the server up front so connection problems are surfaced
+        # before the user types anything.
+        try:
+            await client.healthz()
+        except ScufrisConnectionError as exc:
+            console.print(
+                f"[bold red]server unreachable:[/bold red] {exc}\n"
+                "[dim]start it with `scufris-server` then retry.[/dim]"
+            )
+            return
+        except ScufrisAuthError as exc:
+            # /healthz is unauth on the server, but be defensive anyway.
+            console.print(f"[bold red]auth failed:[/bold red] {exc}")
+            return
+        except ScufrisError as exc:
+            console.print(f"[bold red]error:[/bold red] {exc}")
+            return
+
+        while True:
+            try:
+                user_message = await asyncio.to_thread(_read_input, console, multiline)
+            except KeyboardInterrupt:
+                console.print()
+                continue
+
+            if user_message is None:
+                console.print("\n[dim]bye![/dim]")
+                break
+
+            stripped = user_message.strip()
+            if not stripped:
+                continue
+
+            if stripped.startswith("/"):
+                should_exit, multiline = await _handle_command(
+                    console, client, user_id, stripped, multiline, settings
+                )
+                if should_exit:
+                    console.print("[dim]bye![/dim]")
+                    break
+                continue
+
+            try:
+                await _handle_message(
+                    console,
+                    client,
+                    user_id,
+                    user_message,
+                    render_thinking,
+                    logger,
+                )
+            except KeyboardInterrupt:
+                console.print("[yellow]interrupted[/yellow]")
+
+
+def main() -> None:
     parser = argparse.ArgumentParser(
         prog="scufris-cli",
-        description="Interactive CLI for the Scufris agent.",
+        description="Interactive CLI for the Scufris agent (HTTP client).",
     )
     parser.add_argument(
         "--short-thinking",
@@ -253,155 +424,14 @@ def main() -> None:
         "-q",
         "--quiet",
         action="store_true",
-        help=(
-            "Silence logging — only ERROR-and-above are shown. Useful "
-            "when you just want the chat output. Overrides LOG_LEVEL."
-        ),
+        help="Silence logging — only ERROR-and-above are shown.",
     )
     args = parser.parse_args()
 
-    # CLI is a debugging tool — surface everything by default. `--quiet`
-    # bumps the floor to ERROR; LOG_LEVEL env var still wins if neither
-    # is set. `level=` overrides both env and default in setup_logging.
-    if args.quiet:
-        logger = setup_logging(level=logging.ERROR)
-    else:
-        logger = setup_logging(default_level=logging.DEBUG)
-    config = load_config(require_telegram=False)
-
-    history_manager = create_history_manager(
-        config.max_history_per_user, compactor=create_compactor()
-    )
-    main_agent = setup_scufris(config=config, history_manager=history_manager)
-
-    console = Console()
-    _setup_readline()
-
-    # Mutable settings shared with the slash-command handler and the
-    # thinking renderer. Default is full thinking — the CLI is a debug
-    # tool, so showing everything is the most useful baseline. CLI flag
-    # `--short-thinking` wins; otherwise SCUFRIS_FULL_THINKING=0/false/no
-    # /off starts in short mode.
-    if args.short_thinking:
-        full_thinking = False
-    else:
-        full_env = os.environ.get("SCUFRIS_FULL_THINKING", "").lower()
-        full_thinking = full_env not in ("0", "false", "no", "off")
-    settings: dict = {
-        "full_thinking": full_thinking,
-        "started_at": datetime.now(timezone.utc),
-        "model": config.ollama_model,
-        "base_url": config.ollama_base_url,
-    }
-
-    # Render "thinking" events as dim chat-style messages, indented to
-    # mirror the agent → sub-agent → tool nesting.
-    def render_thinking(ev: ThinkingEvent) -> None:
-        indent = "  " * ev.depth
-        src = display_name(ev.source)
-        if ev.kind == "tool_call":
-            target = display_name(ev.text)
-            verb = "asks" if is_sub_agent(ev.text) else "uses"
-            line = f"{indent}→ [cyan]{src}[/cyan] {verb} [bold]{target}[/bold]"
-            if ev.arg:
-                line += f": [grey50]{ev.arg}[/grey50]"
-            console.print(line)
-            # Phase-2: surface the `context` briefing on its own line so
-            # bad/good delegations are easy to eyeball. Indented one level
-            # past the tool-call line so the visual nesting is obvious.
-            # In short-thinking mode, truncate to the same limit used for
-            # text events — keeps the trace scannable without losing the
-            # signal that *some* context was passed.
-            if ev.context:
-                ctx = ev.context.replace("\n", " ")
-                if not settings.get("full_thinking"):
-                    ctx = truncate_log(ctx, THINKING_SHORT_LIMIT)
-                console.print(f"{indent}  [grey50]↳ context: {ctx}[/grey50]")
-        elif ev.kind == "tool_meta":
-            # Phase 3.5 — `↳ +N prior turns` for sub-agents that loaded
-            # history for this call. Emitted from on_tool_end, so it
-            # lands after the nested trace; that's intentional (option B
-            # in the task design — readability beats strict ordering).
-            if ev.prior_turns and ev.prior_turns > 0:
-                console.print(
-                    f"{indent}  [grey50]↳ +{ev.prior_turns} prior turns[/grey50]"
-                )
-        elif ev.kind == "compaction":
-            # Phase 3 — single-line gray status surfaced from the
-            # history manager when the compactor salvaged something.
-            n_msg = ev.evicted or 0
-            n_facts = ev.new_facts or 0
-            console.print(
-                f"[grey50][memory] {ev.source}: compacted {n_msg} msg(s), "
-                f"+{n_facts} fact(s)[/grey50]"
-            )
-        elif ev.kind == "text":
-            # In `short` mode, keep the chat scannable; full text is also
-            # in the DEBUG log. In `full` mode, print everything verbatim.
-            # Avoid `dim italic` — kitty+tmux renders it with a grey bg.
-            text = ev.text.replace("\n", " ")
-            if not settings.get("full_thinking"):
-                text = truncate_log(text, THINKING_SHORT_LIMIT)
-            console.print(f"{indent}[cyan]{src}[/cyan] [grey50]{text}[/grey50]")
-        else:  # tool_result — currently unused, kept for completeness
-            text = ev.text.replace("\n", " ")
-            if not settings.get("full_thinking"):
-                text = truncate_log(text, THINKING_SHORT_LIMIT)
-            console.print(f"{indent}[grey50]↩ {text}[/grey50]")
-
-    # Register the callback handler so we get the same depth-aware
-    # tool/sub-agent/LLM trace as the Telegram bot. No transport needed.
-    callback_handler = ToolCallbackHandler(on_thinking=render_thinking)
-    # Phase 3: route compaction events through the same renderer.
-    history_manager.set_event_sink(render_thinking)
-    agent_manager = create_agent_manager(
-        agent=main_agent,
-        callbacks=[callback_handler],
-        history_manager=history_manager,
-    )
-
-    console.print(
-        "[bold]Scufris CLI[/bold] — type [bold]/help[/bold] for commands, "
-        "[bold]Ctrl-D[/bold] on empty line to exit."
-    )
-
-    multiline = False
-    loop = asyncio.new_event_loop()
     try:
-        while True:
-            try:
-                user_message = _read_input(console, multiline)
-            except KeyboardInterrupt:
-                console.print()  # break out of the current line cleanly
-                continue
-
-            if user_message is None:
-                console.print("\n[dim]bye![/dim]")
-                break
-
-            stripped = user_message.strip()
-            if not stripped:
-                continue
-
-            if stripped.startswith("/"):
-                should_exit, multiline = _handle_command(
-                    console, history_manager, stripped, multiline, settings
-                )
-                if should_exit:
-                    console.print("[dim]bye![/dim]")
-                    break
-                continue
-
-            try:
-                loop.run_until_complete(
-                    _handle_message(
-                        console, agent_manager, history_manager, user_message, logger
-                    )
-                )
-            except KeyboardInterrupt:
-                console.print("[yellow]interrupted[/yellow]")
-    finally:
-        loop.close()
+        asyncio.run(_amain(args))
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == "__main__":

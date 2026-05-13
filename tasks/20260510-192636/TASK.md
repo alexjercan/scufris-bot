@@ -1,6 +1,6 @@
 # CLI as HTTP client of scufris-server
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 75
 - TAGS: deploy,cli
 
@@ -44,7 +44,9 @@ future TUI) can share one running brain.
 
 ### Out
 - Embedded fallback (running the agent in-process when no server is
-  reachable). Tracked as a possible follow-up; v1 requires a server.
+  reachable). The daemon is now the only entrypoint; the previous
+  in-process CLI is removed outright rather than kept as a fallback
+  module.
 - Telegram bot migration (separate task, not yet created).
 - Daemon auto-spawn from CLI.
 
@@ -71,8 +73,8 @@ future TUI) can share one running brain.
   parser suffices.
 - `render_thinking` in `cli.py` is the contract: keep `ThinkingEvent`'s
   field set stable across server/client to avoid a serialization layer.
-- Old in-process bootstrap can move to `cli_embedded.py` for emergencies
-  and dev, but not advertised.
+- The legacy in-process CLI is deleted as part of this task — the
+  daemon is the only supported way to run Scufris locally.
 
 ## References
 

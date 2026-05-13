@@ -88,7 +88,7 @@ def setup_logging(
     logging.getLogger("langchain_core").setLevel(logging.ERROR)
     logging.getLogger("langchain_ollama").setLevel(logging.ERROR)
 
-    logger.info(f"Logging configured at {logging.getLevelName(level)} level")
+    logger.debug(f"Logging configured at {logging.getLevelName(level)} level")
 
     return logger
 
