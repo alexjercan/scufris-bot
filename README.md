@@ -74,6 +74,52 @@ The flake's `checks.<system>.scufris-vm` boots a NixOS VM, enables the
 service, hits `/v1/healthz`, asserts the security score budget, and
 verifies clean restart.
 
+### Home Manager
+
+For personal laptops or any setup without root, use the Home Manager
+module (`homeManagerModules.scufris`, also exported as `default`). It
+installs `scufris-cli` and can optionally run `scufris-server` as a
+`systemd --user` unit.
+
+```nix
+{
+  imports = [scufris.homeManagerModules.default];
+
+  programs.scufris = {
+    enable = true;
+
+    # Optional: also run the daemon as a user service.
+    server = {
+      enable = true;
+      bind = "127.0.0.1";
+      port = 8765;
+      model = "qwen3:latest";
+      ollamaUrl = "http://127.0.0.1:11434";
+      environmentFile = "${config.home.homeDirectory}/.config/scufris/env";
+    };
+  };
+}
+```
+
+When `server.enable = true`, `SCUFRIS_SERVER_URL` is auto-injected into
+`home.sessionVariables` so a fresh shell's `scufris-cli` connects to
+the user daemon with no extra setup. Add `SCUFRIS_TOKEN` (or anything
+else) via `programs.scufris.clientEnvironment`. Note that
+`home.sessionVariables` only takes effect for **new** shells — re-source
+or log out/in after the first switch.
+
+`systemctl --user status scufris` / `journalctl --user -u scufris`
+inspect the unit. The user-level unit applies the subset of systemd
+hardening that works without root (`PrivateTmp`, `ProtectSystem=strict`,
+`NoNewPrivileges`, `LockPersonality`, ...).
+
+If you also enable the system-wide NixOS module on the same host,
+**pick one** — both default to port 8765 and will collide.
+
+The legacy Telegram-bot HM module is still available as
+`homeManagerModules.scufris-bot` (unchanged options under
+`services.scufris-bot`).
+
 ## Running
 
 ### Telegram bot

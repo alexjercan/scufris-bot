@@ -228,7 +228,14 @@
         nixosModules.scufris = import ./nix/modules/scufris.nix;
         nixosModules.default = self.nixosModules.scufris;
 
-        homeManagerModules.default = {config, lib, pkgs, ...}: let
+        # New module: scufris-cli + optional scufris-server user unit.
+        # Becomes the new `default`; the legacy Telegram-bot module is
+        # still available as `homeManagerModules.scufris-bot` for users
+        # who pinned to it.
+        homeManagerModules.scufris = import ./nix/hm-modules/scufris.nix;
+        homeManagerModules.default = self.homeManagerModules.scufris;
+
+        homeManagerModules.scufris-bot = {config, lib, pkgs, ...}: let
           cfg = config.services.scufris-bot;
         in {
           options.services.scufris-bot = {

@@ -1,6 +1,6 @@
 # Home Manager module for user-level scufris install
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 60
 - TAGS: deploy,nix,home-manager
 
