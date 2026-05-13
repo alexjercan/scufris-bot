@@ -66,6 +66,7 @@
         inputs',
         pkgs,
         system,
+        lib,
         ...
       }: let
         python = pkgs.python3;
@@ -157,14 +158,23 @@
           scufris-server = {
             type = "app";
             program = "${self.packages.${system}.scufris-server}/bin/scufris-server";
+            meta = {
+                description = "SCUFRIS HTTP agent server";
+            };
           };
           scufris-cli = {
             type = "app";
             program = "${self.packages.${system}.scufris-cli}/bin/scufris-cli";
+            meta = {
+                description = "SCUFRIS command-line interface";
+            };
           };
           scufris-bot = {
             type = "app";
             program = "${self.packages.${system}.scufris-bot}/bin/scufris-bot";
+            meta = {
+                description = "SCUFRIS Bot - Telegram bot with AI agent";
+            };
           };
           default = self'.apps.scufris-server;
         };
@@ -172,11 +182,19 @@
         # `nix flake check` runs the full QA gate. Each derivation
         # operates on a fresh writable copy of the source so caches
         # (mypy, pytest) can land in $TMPDIR rather than /nix/store.
-        checks = {
-          ruff = mkCheck "ruff" "ruff check .";
-          mypy = mkCheck "mypy" "mypy .";
-          pytest = mkCheck "pytest" "pytest";
-        };
+        checks =
+          {
+            ruff = mkCheck "ruff" "ruff check .";
+            mypy = mkCheck "mypy" "mypy .";
+            pytest = mkCheck "pytest" "pytest";
+          }
+          // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+            scufris-vm = import ./nix/tests/scufris-vm.nix {
+              inherit pkgs;
+              scufrisModule = self.nixosModules.scufris;
+              scufrisPackage = self'.packages.scufris-server;
+            };
+          };
 
         devShells.default = pkgs.mkShell {
           packages = [
@@ -206,6 +224,9 @@
         # The usual flake attributes can be defined here, including system-
         # agnostic ones like nixosModule and system-enumerating ones, although
         # those are more easily expressed in perSystem.
+
+        nixosModules.scufris = import ./nix/modules/scufris.nix;
+        nixosModules.default = self.nixosModules.scufris;
 
         homeManagerModules.default = {config, lib, pkgs, ...}: let
           cfg = config.services.scufris-bot;

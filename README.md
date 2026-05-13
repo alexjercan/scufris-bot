@@ -27,6 +27,53 @@ nix flake check
 
 `packages.default` and `apps.default` both point at `scufris-server`.
 
+### NixOS service
+
+The flake also exports a NixOS module (`nixosModules.scufris`, also
+re-exported as `nixosModules.default`) that runs `scufris-server` as a
+hardened systemd unit.
+
+```nix
+{
+  inputs.scufris.url = "github:alexjercan/scufris-bot";
+
+  outputs = {self, nixpkgs, scufris}: {
+    nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        scufris.nixosModules.default
+        {
+          services.scufris = {
+            enable = true;
+            bind = "127.0.0.1";
+            port = 8765;
+            ollamaUrl = "http://127.0.0.1:11434";
+            model = "qwen3:latest";
+            environmentFile = "/run/secrets/scufris.env";  # optional
+          };
+        }
+      ];
+    };
+  };
+}
+```
+
+The unit runs under `DynamicUser` with `ProtectSystem=strict`,
+`NoNewPrivileges`, a tight syscall filter, restricted address families
+(`AF_INET`/`AF_INET6`/`AF_UNIX`) and an empty capability set —
+`systemd-analyze security scufris` reports an exposure score below
+`2.0`. `MemoryDenyWriteExecute` is **off** by default because some
+Python ML libraries need W+X pages; flip
+`services.scufris.memoryDenyWriteExecute = true` after verifying with
+your real model backend.
+
+`SIGTERM` triggers a graceful drain (default 30s, tunable via
+`SCUFRIS_SHUTDOWN_GRACE`); `TimeoutStopSec` is set to `35s` to match.
+
+The flake's `checks.<system>.scufris-vm` boots a NixOS VM, enables the
+service, hits `/v1/healthz`, asserts the security score budget, and
+verifies clean restart.
+
 ## Running
 
 ### Telegram bot

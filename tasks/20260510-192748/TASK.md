@@ -1,6 +1,6 @@
 # NixOS module + hardened systemd unit for scufris-server
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 65
 - TAGS: deploy,nix,systemd
 
