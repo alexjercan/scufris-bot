@@ -1,6 +1,6 @@
 # Create tasks for the next sprint - June
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 100
 - TAGS: planning
 
