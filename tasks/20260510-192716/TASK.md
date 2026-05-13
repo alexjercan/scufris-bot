@@ -1,6 +1,6 @@
 # Nix flake: package scufris-server and scufris-cli
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 70
 - TAGS: deploy,nix
 
@@ -60,6 +60,8 @@ Produce a `flake.nix` that builds scufris-bot as two installable packages
   PEP 621 `pyproject.toml` without poetry, prefer `pyproject-nix`
   (lighter, no poetry lock required). If there's a `poetry.lock`, use
   `poetry2nix`. Audit first.
+  - NOTE from user: since we are using `uv` and `uv2nix` use those - also we
+    are using `flake-parts` instead of `flake-utils`
 - Some deps (e.g. `langchain*`, ollama clients) may not be in nixpkgs;
   `pyproject-nix` handles this via `buildPythonPackage` overlays. Budget
   time for 2–3 missing-package overlays.

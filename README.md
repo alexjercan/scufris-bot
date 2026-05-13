@@ -3,6 +3,30 @@
 Scuffed Jarvis — a personal assistant bot powered by an Ollama-backed
 LangChain agent hierarchy, exposed both as a Telegram bot and a local CLI.
 
+## Nix
+
+The project ships a flake (`uv2nix` + `flake-parts`). All commands assume
+flakes are enabled.
+
+```bash
+# Build the HTTP daemon → ./result/bin/scufris-server
+nix build .#scufris-server
+
+# Build the REPL client → ./result/bin/scufris-cli
+nix build .#scufris-cli
+
+# Run the CLI directly (opens the REPL; needs a running scufris-server)
+nix run .#scufris-cli
+
+# Dev shell with python + ruff + mypy + pytest on PATH
+nix develop
+
+# Sandboxed ruff + mypy + pytest (the same checks CI runs)
+nix flake check
+```
+
+`packages.default` and `apps.default` both point at `scufris-server`.
+
 ## Running
 
 ### Telegram bot

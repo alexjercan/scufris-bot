@@ -89,6 +89,36 @@
         editablePythonSet = pythonSet.overrideScope editableOverlay;
         virtualenv = editablePythonSet.mkVirtualEnv "scufris-dev-env" workspace.deps.all;
         inherit (pkgs.callPackages pyproject-nix.build.util {}) mkApplication;
+
+        # Runtime venv — only the project's `default` deps, no dev tools.
+        # Both the server and CLI are exposed as console scripts from the
+        # same `scufris-bot` distribution, so a single mkApplication call
+        # produces a `bin/` directory containing all three entrypoints
+        # (`scufris-server`, `scufris-cli`, `scufris-bot`).
+        runtimeVenv = pythonSet.mkVirtualEnv "scufris-env" workspace.deps.default;
+        scufrisApp = mkApplication {
+          venv = runtimeVenv;
+          package = pythonSet.scufris-bot;
+        };
+
+        # Helper: a derivation that runs a single command against a
+        # writable copy of the source tree using the dev venv. The
+        # output is a marker file so `nix flake check` is happy.
+        mkCheck = name: command:
+          pkgs.runCommand "scufris-${name}" {
+            nativeBuildInputs = [virtualenv pkgs.git pkgs.cacert];
+            src = ./.;
+          } ''
+            cp -r $src work
+            chmod -R +w work
+            cd work
+            export HOME=$TMPDIR
+            export PYTHONPATH=
+            export SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
+            export NIX_SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
+            ${command}
+            touch $out
+          '';
       in {
         # Per-system attributes can be defined here. The self' and inputs'
         # module parameters provide easy access to attributes of the same
@@ -99,23 +129,53 @@
           config.cudaSupport.enable = true;
         };
 
-        # Create a derivation that wraps the venv but that only links package
-        # content present in pythonSet.hello-world.
-        #
-        # This means that files such as:
-        # - Python interpreters
-        # - Activation scripts
-        # - pyvenv.cfg
-        #
-        # Are excluded but things like binaries, man pages, systemd units etc are included.
-        packages.default = mkApplication {
-          venv = pythonSet.mkVirtualEnv "scufris-env" workspace.deps.default;
-          package = pythonSet.scufris-bot;
+        # `scufris-server` and `scufris-cli` resolve to the same
+        # underlying derivation today (one Python distribution, multiple
+        # console scripts) but are exposed under distinct attribute
+        # names so:
+        #   * `nix run .#scufris-cli` picks the right `bin/` entry via
+        #     `meta.mainProgram`.
+        #   * downstream NixOS / Home Manager modules can depend on
+        #     just one of them, leaving room for the two derivations to
+        #     diverge later (e.g. server-only deps).
+        packages = {
+          scufris-server = scufrisApp.overrideAttrs (old: {
+            meta = (old.meta or {}) // {mainProgram = "scufris-server";};
+          });
+          scufris-cli = scufrisApp.overrideAttrs (old: {
+            meta = (old.meta or {}) // {mainProgram = "scufris-cli";};
+          });
+          scufris-bot = scufrisApp.overrideAttrs (old: {
+            meta = (old.meta or {}) // {mainProgram = "scufris-bot";};
+          });
+          default = scufrisApp.overrideAttrs (old: {
+            meta = (old.meta or {}) // {mainProgram = "scufris-server";};
+          });
         };
 
-        apps.default = {
-          type = "app";
-          program = "${self.packages.${system}.default}/bin/scufris-bot";
+        apps = {
+          scufris-server = {
+            type = "app";
+            program = "${self.packages.${system}.scufris-server}/bin/scufris-server";
+          };
+          scufris-cli = {
+            type = "app";
+            program = "${self.packages.${system}.scufris-cli}/bin/scufris-cli";
+          };
+          scufris-bot = {
+            type = "app";
+            program = "${self.packages.${system}.scufris-bot}/bin/scufris-bot";
+          };
+          default = self'.apps.scufris-server;
+        };
+
+        # `nix flake check` runs the full QA gate. Each derivation
+        # operates on a fresh writable copy of the source so caches
+        # (mypy, pytest) can land in $TMPDIR rather than /nix/store.
+        checks = {
+          ruff = mkCheck "ruff" "ruff check .";
+          mypy = mkCheck "mypy" "mypy .";
+          pytest = mkCheck "pytest" "pytest";
         };
 
         devShells.default = pkgs.mkShell {
