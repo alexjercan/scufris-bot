@@ -12,6 +12,8 @@ adapter that talks to `scufris-server` over HTTP, mirroring how
 of two clients of the same daemon — same agents, same memory, same
 runtime — instead of running its own duplicate copy of the agent stack.
 
+We can rename `main.py` to `telegram.py` to make it easier to understand.
+
 ## Scope
 
 ### In
