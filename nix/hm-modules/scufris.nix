@@ -168,7 +168,10 @@ in {
             lib.mapAttrsToList (n: v: "${n}=${v}") serverEnv;
         }
         // lib.optionalAttrs (cfg.server.environmentFile != null) {
-          EnvironmentFile = toString cfg.server.environmentFile;
+          # Leading `-` tells systemd to ignore the file if it doesn't
+          # exist yet, so the unit doesn't crashloop the first time a
+          # user enables the module before populating their secrets.
+          EnvironmentFile = "-${toString cfg.server.environmentFile}";
         };
 
       Install.WantedBy = ["default.target"];
