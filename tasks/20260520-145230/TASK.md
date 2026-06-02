@@ -1,7 +1,7 @@
 # Tool usage histogram in /stats
 
 - STATUS: OPEN
-- PRIORITY: 0
+- PRIORITY: 50
 - TAGS: observability,cli,backlog
 
 ## New Data Collected

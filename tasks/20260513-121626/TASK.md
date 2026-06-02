@@ -1,7 +1,7 @@
 # Knowledge agent: improve reasoning loop, tool selection, and long-term memory
 
 - STATUS: OPEN
-- PRIORITY: 60
+- PRIORITY: 0
 - TAGS: agents,knowledge
 
 ## Goal

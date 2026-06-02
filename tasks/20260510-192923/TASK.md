@@ -1,7 +1,7 @@
 # Secrets and config injection: sops-nix vs EnvironmentFile
 
 - STATUS: OPEN
-- PRIORITY: 50
+- PRIORITY: 0
 - TAGS: deploy,security
 
 ## Goal

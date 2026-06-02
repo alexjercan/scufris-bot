@@ -1,7 +1,7 @@
 # User identity, XDG config, and CLI/Telegram session unification
 
 - STATUS: OPEN
-- PRIORITY: 0
+- PRIORITY: 80
 - TAGS: identity,config,ux,backlog
 
 ## The Problem

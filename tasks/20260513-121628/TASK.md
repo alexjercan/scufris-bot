@@ -1,7 +1,7 @@
 # Journal agent: CalDAV/ICS calendar integration
 
 - STATUS: OPEN
-- PRIORITY: 50
+- PRIORITY: 0
 - TAGS: agents,journal,calendar
 
 ## Goal
