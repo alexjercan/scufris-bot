@@ -40,9 +40,22 @@ Concept: a named user (e.g. `alex`) can be reached from multiple surfaces. Each 
 - Ask something in the CLI, continue in Telegram — same conversation window, same facts, same scratchpad
 - Scheduled briefings fire per `user_id`, not per surface — the server delivers to whichever surface is active, or all of them
 
+>NOTE: Since we already can use `SCUFRIS_USER_ID` to override the CLI user,
+>this doesn't need to be implemented. We can just set the user id to the
+>telegram user id and we have the same session. However it might be convenient
+>to have some kind of mapping layer, maybe in the config.toml we can set that
+>out current user `alex` is mapped to telegram user id `123456789` and then the
+>server can do the mapping internally. This way we don't have to set env vars
+>on the CLI side and we can have a more user-friendly username instead of a
+>number. This might be also useful in the future if we want to have a web
+>interface.
+
 ## XDG User Configuration
 
-A config file at `$XDG_CONFIG_HOME/scufris/config.toml` (defaulting to `~/.config/scufris/config.toml`) that the server and CLI both read on startup. Structured by user identity so it's ready for multi-user without being painful for single-user:
+A config file at `$XDG_CONFIG_HOME/scufris/config.toml` (defaulting to
+`~/.config/scufris/config.toml`) that the server and CLI both read on startup.
+Structured by user identity so it's ready for multi-user without being painful
+for single-user:
 
 ```toml
 [user]
@@ -113,6 +126,5 @@ Adding a second user later is: add a row to `users`, create a second `config.tom
 Small touches that make the cross-surface experience feel seamless rather than accidental:
 
 - `/stats` shows active surfaces: `surfaces: cli (last seen 2m ago), telegram (last seen 1h ago)`
-- The thinking trace in CLI shows `[telegram]` tag on messages that originated there (if history is shared — this might be too noisy, make it opt-in)
 - `/clear` clears history for the user across all surfaces, not just the one you typed it in
 - Server returns a `surface` field in the stats response so the CLI can say "your Telegram is linked as @yourhandle"

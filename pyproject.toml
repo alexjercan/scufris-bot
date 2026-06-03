@@ -23,7 +23,7 @@ dependencies = [
 ]
 
 [project.scripts]
-scufris-bot = "main:main"
+scufris-bot = "bot:main"
 scufris-cli = "cli:main"
 scufris-server = "scufris_server.__main__:main"
 
@@ -33,7 +33,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["utils", "scufris_server", "scufris_client"]
-only-include = ["utils", "scufris_server", "scufris_client", "main.py", "cli.py"]
+only-include = ["utils", "scufris_server", "scufris_client", "bot.py", "cli.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

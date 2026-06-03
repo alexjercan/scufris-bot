@@ -1,6 +1,6 @@
 # Telegram bot: port main.py to use scufris-server HTTP client
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 90
 - TAGS: feature,telegram,refactor
 

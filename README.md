@@ -124,14 +124,47 @@ The legacy Telegram-bot HM module is still available as
 
 ## Running
 
+### Architecture in one paragraph
+
+The agent runtime — model, tools, history, telemetry — runs as a single
+long-lived daemon: `scufris-server`. Every front-end (`scufris-cli`,
+`scufris-bot`, future TUI/web) is a thin HTTP client of that daemon
+sharing the same per-user state. Restarting a front-end never evicts
+your conversation, and CLI/Telegram users with the same `user_id` see
+the same history.
+
+### Start the server first
+
+```bash
+uv run scufris-server      # listens on 127.0.0.1:8765 by default
+```
+
+Configuration is via the same `.env` the bot used to read directly
+(`OLLAMA_MODEL`, `OLLAMA_BASE_URL`, etc.). Set `SCUFRIS_TOKEN` if you
+want bearer-token auth (clients must then pass the same value).
+
 ### Telegram bot
 
-Requires `TELEGRAM_BOT_TOKEN` and `ALLOWED_USER_IDS` in the environment
-(or a `.env` file).
+Requires the daemon to already be running. Set `TELEGRAM_BOT_TOKEN` and
+`ALLOWED_USER_IDS` in the environment (or a `.env` file). If your
+server is on another host or uses auth, also set `SCUFRIS_SERVER_URL`
+and `SCUFRIS_TOKEN`.
 
 ```bash
 uv run scufris-bot
 ```
+
+The bot fails fast at startup if `scufris-server` is unreachable or
+auth fails — there's no useful partial state. Each Telegram user's
+numeric id is forwarded to the server as their `user_id`, so per-user
+history is preserved across bot restarts (and shareable with
+`scufris-cli` if you set `SCUFRIS_USER_ID` to your Telegram id).
+
+While the agent is thinking, the bot posts a placeholder message and
+edits it in place with a depth-aware "tool calls / sub-agents asked"
+trail (rate-limited to ~1 edit/sec). The placeholder is deleted when
+the final answer arrives so your scrollback only retains the answer
+itself.
 
 ## Debugging
 
