@@ -79,7 +79,10 @@ The full config schema lives in `utils/config.py`; the module's
 `settings` is rendered verbatim to `/etc/scufris/config.toml` via
 `pkgs.formats.toml`. Secrets (`SCUFRIS_TOKEN`, `TELEGRAM_BOT_TOKEN`) go
 in `environmentFile` — env vars override matching TOML keys at load
-time so secrets stay out of the Nix store.
+time so secrets stay out of the Nix store. See
+[`tasks/20260510-192923/DESIGN.md`](tasks/20260510-192923/DESIGN.md) for
+the plain env-file recipe (recommended) and sops-nix/agenix/systemd-creds
+opt-in patterns.
 
 The flake's `checks.<system>.scufris-vm` boots a NixOS VM, enables the
 service, hits `/v1/healthz`, asserts the security score budget, and
@@ -107,22 +110,33 @@ installs `scufris-cli` and can optionally run `scufris-server` as a
       client.server_url = "http://127.0.0.1:8765";
     };
 
-    # Optional: also run the daemon as a user service.
-    server = {
-      enable = true;
-      environmentFile = "${config.home.homeDirectory}/.config/scufris/env";
-    };
+    # Shared by the user-level server, bot, and any future per-user
+    # units. The CLI does *not* auto-source this — see
+    # tasks/20260510-192923/DESIGN.md.
+    environmentFile = "${config.home.homeDirectory}/.config/scufris/env";
+
+    # Optional: also run the daemon and/or Telegram bot as user services.
+    server.enable = true;
+    bot.enable = true;
   };
 }
 ```
 
 The module renders `settings` to `${"$XDG_CONFIG_HOME"}/scufris/config.toml`
-and exports `SCUFRIS_CONFIG` as a session variable so both the CLI and
-the optional user-level server read the same file. Secrets
-(`SCUFRIS_TOKEN`, `TELEGRAM_BOT_TOKEN`) go in `server.environmentFile`
-— env vars override TOML keys at load time. Note that
-`home.sessionVariables` only takes effect for **new** shells —
-re-source or log out/in after the first switch.
+and exports `SCUFRIS_CONFIG` as a session variable so the CLI, the
+optional user-level server, and the optional Telegram bot all read the
+same file. Secrets (`SCUFRIS_TOKEN`, `TELEGRAM_BOT_TOKEN`) go in the
+top-level `environmentFile` — env vars override TOML keys at load time.
+See
+[`tasks/20260510-192923/DESIGN.md`](tasks/20260510-192923/DESIGN.md)
+for deployment patterns (plain env-file, sops-nix, agenix,
+systemd-creds). Note that `home.sessionVariables` only takes effect
+for **new** shells — re-source or log out/in after the first switch.
+
+When both `server.enable` and `bot.enable` are true, the bot unit is
+ordered `After=scufris.service` so the daemon comes up first; the bot
+itself fails fast on an unreachable server and `Restart=on-failure`
+handles the startup race.
 
 `systemctl --user status scufris` / `journalctl --user -u scufris`
 inspect the unit. The user-level unit applies the subset of systemd

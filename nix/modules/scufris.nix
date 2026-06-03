@@ -77,6 +77,10 @@ in {
         unit start so secrets never end up in the Nix store. Env vars
         override matching TOML keys (`telegram.bot_token`,
         `server.token`) at load time.
+
+        See `tasks/20260510-192923/DESIGN.md` for deployment patterns
+        (plain env-file, sops-nix, agenix, systemd-creds) and
+        file-permission guidance.
       '';
     };
 

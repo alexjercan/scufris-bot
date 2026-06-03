@@ -55,9 +55,30 @@ in {
         Schema is documented in `utils/config.py`.
 
         Secrets (`server.token`, `telegram.bot_token`) belong in
-        `programs.scufris.server.environmentFile` or your shell's own
+        `programs.scufris.environmentFile` or your shell's own
         secret-loading mechanism — env vars override matching TOML
         keys at load time.
+      '';
+    };
+
+    environmentFile = lib.mkOption {
+      type = lib.types.nullOr lib.types.path;
+      default = null;
+      example = "\${config.home.homeDirectory}/.config/scufris/env";
+      description = ''
+        Path to a `KEY=value` file with secrets (`SCUFRIS_TOKEN`,
+        `TELEGRAM_BOT_TOKEN`, future API keys). Loaded by systemd
+        `--user` at unit start so secrets stay out of the Nix store.
+        Env vars override matching TOML keys at load time.
+
+        Top-level so future per-user front-ends (e.g. a bot unit) can
+        share the same file. The CLI runs in your interactive shell
+        and does **not** auto-source this file — if you need
+        `SCUFRIS_TOKEN` for `scufris-cli`, source the file from your
+        shell init yourself (`set -a; . ~/.config/scufris/env; set +a`).
+
+        See `tasks/20260510-192923/DESIGN.md` for deployment patterns
+        (env-file vs sops-nix vs agenix vs systemd-creds).
       '';
     };
 
@@ -70,17 +91,16 @@ in {
         defaultText = lib.literalExpression "scufris.packages.\${system}.scufris-server";
         description = "The scufris-server package to run as a user service.";
       };
+    };
 
-      environmentFile = lib.mkOption {
-        type = lib.types.nullOr lib.types.path;
-        default = null;
-        example = "\${config.home.homeDirectory}/.config/scufris/env";
-        description = ''
-          Path to a KEY=value file with secrets (`SCUFRIS_TOKEN`,
-          `TELEGRAM_BOT_TOKEN`, ...). Loaded by systemd at unit start
-          so secrets stay out of the Nix store. Env vars override
-          matching TOML keys at load time.
-        '';
+    bot = {
+      enable = lib.mkEnableOption "scufris-bot (Telegram) as a systemd --user service";
+
+      package = lib.mkOption {
+        type = lib.types.package;
+        default = flakePkgs.scufris-bot;
+        defaultText = lib.literalExpression "scufris.packages.\${system}.scufris-bot";
+        description = "The scufris-bot package to run as a user service.";
       };
     };
   };
@@ -88,11 +108,12 @@ in {
   config = lib.mkIf cfg.enable {
     home.packages =
       [cfg.package]
-      ++ lib.optional cfg.server.enable cfg.server.package;
+      ++ lib.optional cfg.server.enable cfg.server.package
+      ++ lib.optional cfg.bot.enable cfg.bot.package;
 
     xdg.configFile.${configRelPath}.source = configFile;
 
-    # Both the CLI in interactive shells and the user unit below read
+    # Both the CLI in interactive shells and the user units below read
     # the same env var. `home.sessionVariables` only affects newly
     # started shells — re-source or re-login to pick it up.
     home.sessionVariables.SCUFRIS_CONFIG = configAbsPath;
@@ -130,11 +151,58 @@ in {
           # `SCUFRIS_CONFIG` explicitly here too.
           Environment = ["SCUFRIS_CONFIG=${configAbsPath}"];
         }
-        // lib.optionalAttrs (cfg.server.environmentFile != null) {
+        // lib.optionalAttrs (cfg.environmentFile != null) {
           # Leading `-` tells systemd to ignore the file if it doesn't
           # exist yet, so the unit doesn't crashloop the first time a
           # user enables the module before populating their secrets.
-          EnvironmentFile = "-${toString cfg.server.environmentFile}";
+          EnvironmentFile = "-${toString cfg.environmentFile}";
+        };
+
+      Install.WantedBy = ["default.target"];
+    };
+
+    systemd.user.services.scufris-bot = lib.mkIf cfg.bot.enable {
+      Unit = {
+        Description = "Scufris Telegram bot (user)";
+        # Bot fails fast if the server is unreachable, so order it
+        # after the server unit when both are enabled. Plain `After`
+        # is enough — Restart=on-failure handles the startup race
+        # if the server is still warming up.
+        After =
+          ["network-online.target"]
+          ++ lib.optional cfg.server.enable "scufris.service";
+        Wants =
+          ["network-online.target"]
+          ++ lib.optional cfg.server.enable "scufris.service";
+      };
+
+      Service =
+        {
+          Type = "simple";
+          ExecStart = "${cfg.bot.package}/bin/scufris-bot";
+          Restart = "on-failure";
+          RestartSec = 10;
+          KillSignal = "SIGTERM";
+
+          # Same user-unit hardening profile as the server. The bot
+          # only needs outbound HTTP (to Telegram + to scufris-server).
+          PrivateTmp = true;
+          ProtectSystem = "strict";
+          NoNewPrivileges = true;
+          LockPersonality = true;
+          RestrictRealtime = true;
+          RestrictSUIDSGID = true;
+          UMask = "0077";
+
+          Environment = ["SCUFRIS_CONFIG=${configAbsPath}"];
+        }
+        // lib.optionalAttrs (cfg.environmentFile != null) {
+          # `TELEGRAM_BOT_TOKEN` is required for the bot to start;
+          # without it the unit will fail (no leading `-`). Drop the
+          # `-` here intentionally — a missing env file means the bot
+          # has no token, which is a real misconfiguration worth
+          # surfacing as a unit failure.
+          EnvironmentFile = toString cfg.environmentFile;
         };
 
       Install.WantedBy = ["default.target"];

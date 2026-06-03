@@ -1,6 +1,6 @@
 # Secrets and config injection: sops-nix vs EnvironmentFile
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 0
 - TAGS: deploy,security
 
@@ -14,7 +14,7 @@ laptops and shared/multi-user hosts.
 ## Scope
 
 ### In
-- Short comparison doc (`docs/secrets.md` or README section) of:
+- Short comparison doc (`tasks/20260510-192923/DESIGN.md`) of:
   - **Plain `EnvironmentFile=`** — file outside the Nix store, root-readable,
     written by hand or external tooling. Simplest. Recommended baseline.
   - **sops-nix** — encrypted secrets in the repo, decrypted at activation
@@ -73,3 +73,19 @@ laptops and shared/multi-user hosts.
 - sops-nix: https://github.com/Mic92/sops-nix
 - agenix: https://github.com/ryantm/agenix
 - systemd-creds: https://systemd.io/CREDENTIALS/
+
+## Resolution
+
+Delivered as `tasks/20260510-192923/DESIGN.md`. Covers all four mechanisms
+(env-file / sops-nix / agenix / systemd-creds) with copy-pasteable
+recipes, the secrets-vs-config audit table, file-permission
+guidance, and a comparison matrix. Both module options'
+`environmentFile` description now points at the doc; README links
+it from both the NixOS and HM sections.
+
+Companion change: HM `environmentFile` was hoisted from
+`programs.scufris.server.environmentFile` to top-level
+`programs.scufris.environmentFile`, mirroring the NixOS module shape
+and making it available to future per-user front-ends (bot,
+sub-agents) that don't run inside the server unit. Consumer
+(`~/personal/nix.dotfiles/home/alex/default.nix`) updated to match.
