@@ -197,12 +197,14 @@ in {
           Environment = ["SCUFRIS_CONFIG=${configAbsPath}"];
         }
         // lib.optionalAttrs (cfg.environmentFile != null) {
-          # `TELEGRAM_BOT_TOKEN` is required for the bot to start;
-          # without it the unit will fail (no leading `-`). Drop the
-          # `-` here intentionally — a missing env file means the bot
-          # has no token, which is a real misconfiguration worth
-          # surfacing as a unit failure.
-          EnvironmentFile = toString cfg.environmentFile;
+          # Same `-` soft-fail policy as the server unit. If the file
+          # is missing or unreadable (a common HM footgun: installing
+          # it with `sudo install -m 0400 -o root` from the NixOS
+          # recipe instead of `chmod 600` as your own user), the
+          # spawn-layer "Result: resources" failure is unhelpful —
+          # let Python start instead and surface a real
+          # "TELEGRAM_BOT_TOKEN missing" error.
+          EnvironmentFile = "-${toString cfg.environmentFile}";
         };
 
       Install.WantedBy = ["default.target"];

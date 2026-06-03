@@ -45,16 +45,24 @@ TELEGRAM_BOT_TOKEN=xxxx-REPLACE-ME-bot-token
 SCUFRIS_TOKEN=xxxx-REPLACE-ME-bearer-token
 ```
 
-Permissions:
+Permissions — **the deployment target dictates the owner**, not your
+muscle memory. Mixing these up will produce systemd's least-helpful
+error message (`Result: resources` / `Failed to load environment
+files: Permission denied`):
 
-| Deployment                | Mode  | Owner          |
-| ------------------------- | ----- | -------------- |
-| NixOS (DynamicUser)       | `0400`| `root:root`    |
+| Deployment                             | Mode  | Owner             |
+| -------------------------------------- | ----- | ----------------- |
+| Home Manager (per-user, systemd `--user`) | `0600`| `$USER:$USER`     |
+| NixOS (`DynamicUser` — the default)    | `0400`| `root:root`       |
 | NixOS (static `services.scufris.user`) | `0400`| `:scufris` (or `0440 root:scufris`) |
-| Home Manager (per-user)   | `0600`| `$USER:$USER`  |
 
-systemd reads the file before dropping privileges, so root-owned is
-fine on NixOS even with `DynamicUser`.
+For Home Manager this means: **do not** `sudo install` the file — the
+user systemd instance runs as you, not root, and won't be able to
+read a root-owned file even at `0444`. Use `install` (or just `cat >`)
+as your own user.
+
+systemd reads the file before dropping privileges on system units, so
+root-owned is fine on NixOS even with `DynamicUser`.
 
 ## Recipe 1 — plain env-file (recommended)
 
@@ -96,20 +104,26 @@ just starts without those overrides. Useful on first boot.
     settings = { /* ... */ };
     environmentFile = "${config.home.homeDirectory}/.config/scufris/env";
     server.enable = true;
+    bot.enable    = true;
   };
-
-  # One-time placeholder so the file exists. Real secrets go in
-  # outside Home Manager (e.g. via a private dotfiles overlay or
-  # `chmod 600` + manual edit). Anything written via `xdg.configFile`
-  # ends up in the Nix store — fine for placeholders, not for real
-  # secrets.
-  xdg.configFile."scufris/env".text = ''
-    # placeholder — replace with real secrets, e.g.:
-    # TELEGRAM_BOT_TOKEN=xxxx-REPLACE-ME
-    # SCUFRIS_TOKEN=xxxx-REPLACE-ME
-  '';
 }
 ```
+
+Create the file as **your own user** (not via `sudo install`, which
+would leave it root-owned and unreadable to the user systemd
+instance):
+
+```bash
+install -m 0600 -D /dev/stdin ~/.config/scufris/env <<'EOF'
+TELEGRAM_BOT_TOKEN=xxxx-REPLACE-ME
+SCUFRIS_TOKEN=xxxx-REPLACE-ME
+EOF
+```
+
+Don't manage this file via `xdg.configFile."scufris/env".text` — that
+puts the contents in the Nix store, which is world-readable. A
+placeholder via `home.activation` is fine if you want HM to scaffold
+an empty file on first switch; real secrets stay outside the store.
 
 The CLI does **not** auto-source this file. If you need
 `SCUFRIS_TOKEN` for `scufris-cli` in your shell, source it yourself:
