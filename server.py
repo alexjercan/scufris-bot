@@ -1,4 +1,10 @@
-"""``python -m scufris_server`` / ``scufris-server`` entrypoint."""
+"""``scufris-server`` entrypoint.
+
+Top-level sibling to :mod:`bot` and :mod:`cli`. Kept intentionally tiny
+— the actual ASGI app lives in :mod:`scufris_server.app` so it stays
+importable as ``scufris_server.app:create_app`` for uvicorn workers
+and test harnesses.
+"""
 
 from __future__ import annotations
 
