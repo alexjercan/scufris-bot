@@ -197,11 +197,15 @@ class ToolCallbackHandler(BaseCallbackHandler):
         telegram_transport: Optional[TelegramTransport] = None,
         update: Optional[Update] = None,
         on_thinking: Optional[ThinkingCallback] = None,
+        history_manager: Optional[Any] = None,
+        user_id: Optional[int] = None,
     ):
         super().__init__()
         self.telegram_transport = telegram_transport
         self.update = update
         self.on_thinking = on_thinking
+        self.history_manager = history_manager
+        self.user_id = user_id
         self.logger = logging.getLogger("scufris-bot.agent.tools")
 
         # run_id -> _RunInfo (only for runs we actively track)
@@ -433,6 +437,19 @@ class ToolCallbackHandler(BaseCallbackHandler):
         )
         self.logger.debug(f"{prefix}  output: {truncate_log(output_content, 500)}")
         self._maybe_log_memory(info)
+
+        # Per-user tool counter for /stats histogram. Records every
+        # tool — including sub-agents — so the histogram is the
+        # cross-cutting view. The per-agent table already has its
+        # own ``invocations`` column tracked separately via
+        # ``record_invocation`` from sub_agent_tool.
+        if self.history_manager is not None and self.user_id is not None:
+            try:
+                self.history_manager.record_tool_invocation(
+                    self.user_id, info.name
+                )
+            except Exception:  # pragma: no cover — never break the agent
+                self.logger.exception("record_tool_invocation failed")
 
         # Telemetry: emit a sub-agent event if we stashed sizes at start.
         if "query_chars" in info.extra:

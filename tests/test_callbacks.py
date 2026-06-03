@@ -222,3 +222,54 @@ def test_thinking_event_dataclass_defaults():
     assert ev.arg is None
     assert ev.context is None
     assert ev.prior_turns is None
+
+
+# ---------------------------------------------------------------------------
+# Per-tool counter handoff to history manager
+# ---------------------------------------------------------------------------
+
+
+class _FakeHistory:
+    """Minimal stand-in exposing only ``record_tool_invocation``."""
+
+    def __init__(self):
+        self.calls = []
+
+    def record_tool_invocation(self, user_id, tool_name):
+        self.calls.append((user_id, tool_name))
+
+
+def test_on_tool_end_records_tool_invocation_when_wired():
+    hm = _FakeHistory()
+    h = ToolCallbackHandler(history_manager=hm, user_id=42)
+    rid = uuid4()
+    h.on_tool_start({"name": "web_search"}, '{"query": "x"}', run_id=rid)
+    h.on_tool_end(_FakeOutput("results"), run_id=rid)
+    assert hm.calls == [(42, "web_search")]
+
+
+def test_on_tool_end_skips_recording_without_user_id():
+    hm = _FakeHistory()
+    h = ToolCallbackHandler(history_manager=hm)  # user_id omitted
+    rid = uuid4()
+    h.on_tool_start({"name": "web_search"}, "{}", run_id=rid)
+    h.on_tool_end(_FakeOutput("ok"), run_id=rid)
+    assert hm.calls == []
+
+
+def test_on_tool_end_skips_recording_without_history_manager():
+    """No-arg construction (e.g. CLI) is still valid and records nothing."""
+    h = ToolCallbackHandler(user_id=1)
+    rid = uuid4()
+    h.on_tool_start({"name": "weather"}, "{}", run_id=rid)
+    # Should not raise even without a history_manager.
+    h.on_tool_end(_FakeOutput("sunny"), run_id=rid)
+
+
+def test_on_tool_end_records_sub_agent_calls_too():
+    """Histogram is the cross-cutting view — sub-agents are tracked too."""
+    hm = _FakeHistory()
+    h = ToolCallbackHandler(history_manager=hm, user_id=7)
+    rid = _start_sub_agent_run(h)
+    h.on_tool_end(_FakeOutput("ok"), run_id=rid)
+    assert hm.calls == [(7, "knowledge_agent")]

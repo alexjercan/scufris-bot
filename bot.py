@@ -26,12 +26,14 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime
 from typing import Optional
 
-from telegram import Message, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message, Update
 from telegram.error import BadRequest, TelegramError
 from telegram.ext import (
     ApplicationBuilder,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -70,6 +72,55 @@ SCUFRIS_TOKEN = config.server.token
 PLACEHOLDER_EDIT_INTERVAL = 1.0  # seconds between consecutive edits
 PLACEHOLDER_MAX_LEN = 3500  # leave headroom under Telegram's 4096 cap
 
+# Telegram hard cap on a single message body. We truncate the expanded
+# trace to fit answer + separator + trace.
+TELEGRAM_MAX_MESSAGE = 4096
+
+# Inline-keyboard labels for the collapsible thinking trace under
+# every final answer. The arrow direction matches the action: ▼ means
+# "expand downward", ▲ means "collapse upward".
+THINKING_LABEL_SHOW = "💭 Show thinking ▼"
+THINKING_LABEL_HIDE = "💭 Hide thinking ▲"
+
+# Marker line that visually separates the answer from the (expanded)
+# thinking trace. Italic + low-key on purpose.
+_THINKING_SEPARATOR = "\n\n_— thinking —_\n"
+
+# Per-message cache of (answer, thinking_trace), keyed by Telegram
+# message_id of the answer. Bounded to keep memory predictable across
+# a long-running bot. Survives only this bot process — after a restart,
+# stale callbacks render a polite "(thinking trace expired)" notice.
+_THINKING_CACHE_MAX = 256
+_thinking_cache: "dict[int, tuple[str, str]]" = {}
+
+
+def _store_thinking(message_id: int, answer: str, trace: str) -> None:
+    """Cache ``(answer, trace)`` for a posted final-answer message.
+
+    Evicts the oldest entry once :data:`_THINKING_CACHE_MAX` is exceeded.
+    Insertion order is preserved by ``dict`` so eviction is FIFO.
+    """
+    _thinking_cache[message_id] = (answer, trace)
+    while len(_thinking_cache) > _THINKING_CACHE_MAX:
+        oldest = next(iter(_thinking_cache))
+        del _thinking_cache[oldest]
+
+
+def _thinking_keyboard(expanded: bool) -> InlineKeyboardMarkup:
+    """Build the inline keyboard for the answer-message toggle.
+
+    ``callback_data`` encodes the *desired* state on press, so the
+    handler can be stateless: ``think:show`` expands, ``think:hide``
+    collapses.
+    """
+    if expanded:
+        return InlineKeyboardMarkup(
+            [[InlineKeyboardButton(THINKING_LABEL_HIDE, callback_data="think:hide")]]
+        )
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton(THINKING_LABEL_SHOW, callback_data="think:show")]]
+    )
+
 # Single client reused for every turn; opened in main() before polling
 # starts and closed on shutdown.
 _client: Optional[ScufrisClient] = None
@@ -79,6 +130,24 @@ def _monotonic() -> float:
     """Indirection so tests can fake the clock without monkey-patching
     ``time.monotonic`` globally (which breaks the event loop)."""
     return time.monotonic()
+
+
+# Per-tool icon for the user-facing thinking trace. Sub-agents share a
+# single icon (🤖) so delegations are visually distinct from leaf-tool
+# calls. Falls back to a neutral wrench when a tool isn't listed.
+_TOOL_ICONS: dict[str, str] = {
+    "web_search": "🔍",
+    "weather": "🌤",
+    "calculator_tool": "🧮",
+    "datetime_tool": "🕒",
+    "opencode": "💻",
+}
+
+
+def _tool_icon(tool_name: str) -> str:
+    if is_sub_agent(tool_name):
+        return "🤖"
+    return _TOOL_ICONS.get(tool_name, "🔧")
 
 
 def _client_or_raise() -> ScufrisClient:
@@ -154,13 +223,15 @@ class PlaceholderRenderer:
     @staticmethod
     def _format(ev: ThinkingEvent) -> Optional[str]:
         indent = "  " * ev.depth
+        branch = "└─ " if ev.depth > 0 else ""
         src = display_name(ev.source)
         if ev.kind == "tool_call":
             target = display_name(ev.text)
+            icon = _tool_icon(ev.text)
             verb = "asks" if is_sub_agent(ev.text) else "uses"
-            line = f"{indent}→ {src} {verb} {target}"
+            line = f"{indent}{branch}{icon} {src} {verb} {target}"
             if ev.arg:
-                line += f": {truncate_log(ev.arg, 80)}"
+                line += f": {ev.arg}"
             return line
         if ev.kind == "tool_meta":
             if ev.prior_turns and ev.prior_turns > 0:
@@ -169,13 +240,13 @@ class PlaceholderRenderer:
         if ev.kind == "compaction":
             n_msg = ev.evicted or 0
             n_facts = ev.new_facts or 0
-            return f"[memory] {ev.source}: compacted {n_msg} msg(s), +{n_facts} fact(s)"
+            return f"🧹 [memory] {ev.source}: compacted {n_msg} msg(s), +{n_facts} fact(s)"
         if ev.kind == "text":
-            text = truncate_log(ev.text.replace("\n", " "), 200)
-            return f"{indent}{src}: {text}"
+            text = ev.text.replace("\n", " ")
+            return f"{indent}  💭 {src}: {text}"
         # tool_result and unknown kinds — keep a short note for parity
-        text = truncate_log(ev.text.replace("\n", " "), 200)
-        return f"{indent}↩ {text}"
+        text = ev.text.replace("\n", " ")
+        return f"{indent}  ↩ {text}"
 
     def _render(self) -> str:
         body = "\n".join(self._lines).strip() or "thinking…"
@@ -216,6 +287,15 @@ class PlaceholderRenderer:
             await self._message.delete()
         except TelegramError as exc:
             logger.debug(f"placeholder delete failed: {exc}")
+
+    def trace_text(self) -> str:
+        """Return the accumulated thinking trace as plain text.
+
+        Used to seed the collapsible-thinking cache so the answer
+        message can re-render the trace on demand without re-running
+        the agent.
+        """
+        return "\n".join(self._lines).strip()
 
 
 # ----------------------------------------------------------------------
@@ -304,7 +384,27 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     send_start = time.time()
-    await telegram_transport.send_message(update, final_text)
+    trace = renderer.trace_text()
+    if trace:
+        # Post the answer as a single message with a "Show thinking"
+        # toggle. We post directly (bypassing chunking) because inline
+        # keyboards need a single message to attach to. If the answer
+        # itself is too long, fall back to plain chunked send and skip
+        # the toggle — better than truncating the user's reply.
+        if len(final_text) <= TELEGRAM_MAX_MESSAGE:
+            sent = await update.message.reply_text(
+                final_text, reply_markup=_thinking_keyboard(expanded=False)
+            )
+            _store_thinking(sent.message_id, final_text, trace)
+        else:
+            logger.debug(
+                "answer too long for inline-keyboard toggle (%d chars); "
+                "falling back to chunked send",
+                len(final_text),
+            )
+            await telegram_transport.send_message(update, final_text)
+    else:
+        await telegram_transport.send_message(update, final_text)
     send_duration = time.time() - send_start
     total_duration = time.time() - request_start
 
@@ -312,6 +412,69 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"Request completed | total={total_duration:.2f}s "
         f"(send={send_duration:.2f}s) | response={len(final_text)} chars"
     )
+
+
+async def thinking_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle the inline-keyboard toggle on a final-answer message.
+
+    ``callback_data`` is ``think:show`` (expand) or ``think:hide``
+    (collapse). When the cache is missing the trace (e.g. the bot was
+    restarted between answer and tap) we politely say so and remove
+    the keyboard so the button can't be pressed again.
+    """
+    query = update.callback_query
+    if query is None or query.data is None or query.message is None:
+        return
+    await query.answer()
+
+    parts = query.data.split(":", 1)
+    if len(parts) != 2 or parts[0] != "think":
+        return
+    target = parts[1]  # "show" | "hide"
+
+    msg_id = query.message.message_id
+    cached = _thinking_cache.get(msg_id)
+    if cached is None:
+        # Stale (post-restart) — drop the keyboard and tell the user.
+        # ``query.message`` is typed ``MaybeInaccessibleMessage``; fall
+        # back to "" when ``.text`` is unavailable.
+        prior = getattr(query.message, "text", None) or ""
+        try:
+            await query.edit_message_text(
+                prior + "\n\n_(thinking trace expired)_",
+                parse_mode="Markdown",
+            )
+        except TelegramError as exc:
+            logger.debug("stale-trace edit failed: %s", exc)
+        return
+
+    answer, trace = cached
+    if target == "show":
+        # Truncate trace if needed so answer + separator + trace fits.
+        budget = TELEGRAM_MAX_MESSAGE - len(answer) - len(_THINKING_SEPARATOR) - 16
+        body = trace if len(trace) <= max(budget, 0) else "…\n" + trace[-budget:]
+        new_text = answer + _THINKING_SEPARATOR + body
+        keyboard = _thinking_keyboard(expanded=True)
+    else:
+        new_text = answer
+        keyboard = _thinking_keyboard(expanded=False)
+
+    try:
+        await query.edit_message_text(
+            new_text, parse_mode="Markdown", reply_markup=keyboard
+        )
+    except BadRequest as exc:
+        if "not modified" in str(exc).lower():
+            return
+        # Markdown can blow up on unbalanced underscores in the trace —
+        # retry without parse_mode rather than failing the toggle.
+        logger.debug("toggle edit (markdown) failed: %s — retrying plain", exc)
+        try:
+            await query.edit_message_text(new_text, reply_markup=keyboard)
+        except TelegramError as exc2:
+            logger.debug("toggle edit (plain) failed: %s", exc2)
+    except TelegramError as exc:
+        logger.debug("toggle edit failed: %s", exc)
 
 
 @restricted(list(config.telegram.allowed_user_ids))
@@ -362,10 +525,128 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await telegram_transport.send_error_message(update, f"stats failed: {exc}")
         return
 
-    lines = result.get("lines") or []
-    body = "\n".join(lines) if lines else "(no stats available)"
-    # Wrap in a Markdown code fence for stable column alignment on Telegram.
-    await update.message.reply_text(f"```\n{body}\n```", parse_mode="Markdown")
+    text = format_telegram_stats(result)
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+
+def _md_escape(text: str) -> str:
+    """Escape characters that have meaning in Telegram legacy Markdown.
+
+    Legacy Markdown only treats ``_ * ` [`` specially outside code blocks.
+    We use this for inline values like model names that may contain
+    underscores (e.g. ``qwen2_5:14b``).
+    """
+    for ch in ("_", "*", "`", "["):
+        text = text.replace(ch, "\\" + ch)
+    return text
+
+
+def format_telegram_stats(payload: dict) -> str:
+    """Format ``/stats`` payload for Telegram (legacy Markdown).
+
+    Layout:
+      bold heading + summary scalars (inline-code values),
+      ``Per-agent:`` bold + monospace fenced table,
+      ``Tool usage:`` bold + monospace fenced histogram.
+
+    Values that contain underscores or backticks are escaped so they
+    don't accidentally start italic/code spans. Tables stay inside
+    fenced code blocks where Markdown is inert, so column alignment
+    is preserved verbatim.
+    """
+    summary = payload.get("summary") or {}
+    rows = payload.get("rows") or {}
+    tools = payload.get("tools") or {}
+
+    out: list[str] = ["*📊 Scufris session*", ""]
+    if summary:
+        uptime = _md_escape(str(summary.get("uptime", "—")))
+        model = _md_escape(str(summary.get("model", "—")))
+        base_url = _md_escape(str(summary.get("base_url", "—")))
+        total_msgs = summary.get("total_messages", 0)
+        total_inv = summary.get("total_invocations", 0)
+        out.append(f"_Uptime:_ `{uptime}`")
+        out.append(f"_Model:_ `{model}` @ `{base_url}`")
+        out.append(f"_Messages:_ *{total_msgs}*  _Invocations:_ *{total_inv}*")
+        out.append("")
+
+    # Per-agent table — render inside a fenced code block. We re-use the
+    # same column logic as format_stats_lines but operate directly on
+    # ``rows`` so we don't depend on parsing the daemon's pre-rendered
+    # text.
+    if rows:
+        from utils.stats import format_relative
+
+        def _coerce_ts(value):
+            """Last-activity comes back as an ISO string over JSON."""
+            if value is None or isinstance(value, datetime):
+                return value
+            if isinstance(value, str):
+                try:
+                    # Python's fromisoformat accepts the trailing Z only
+                    # from 3.11+, but we still defensively normalise it.
+                    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+                except ValueError:
+                    return None
+            return None
+
+        ordered = sorted(
+            rows.items(),
+            key=lambda kv: (kv[1].get("history_disabled", False), kv[0]),
+        )
+        header = ("agent", "model", "memory", "calls", "last")
+        table_rows: list[tuple] = [header]
+        for agent, t in ordered:
+            model_cell = t.get("model") or "—"
+            calls_cell = str(t.get("invocations", 0))
+            last_cell = format_relative(_coerce_ts(t.get("last_activity")))
+            if t.get("history_disabled"):
+                memory_cell = "(history disabled)"
+            elif not t.get("messages"):
+                memory_cell = "0 msgs"
+            else:
+                msgs = t["messages"]
+                tokens = t.get("tokens", 0)
+                budget = t.get("budget")
+                if budget:
+                    pct = (tokens * 100) // budget
+                    memory_cell = f"{msgs} msgs / ~{tokens} tok ({pct}%)"
+                else:
+                    memory_cell = f"{msgs} msgs / ~{tokens} tok"
+            table_rows.append((agent, model_cell, memory_cell, calls_cell, last_cell))
+
+        widths = [max(len(r[i]) for r in table_rows) for i in range(len(header))]
+
+        def _fmt(r: tuple) -> str:
+            return (
+                f"{r[0]:<{widths[0]}}  {r[1]:<{widths[1]}}  "
+                f"{r[2]:<{widths[2]}}  {r[3]:>{widths[3]}}  {r[4]:<{widths[4]}}"
+            ).rstrip()
+
+        out.append("*Per-agent:*")
+        out.append("```")
+        out.append(_fmt(header))
+        out.append("  ".join("─" * w for w in widths))
+        for r in table_rows[1:]:
+            out.append(_fmt(r))
+        out.append("```")
+        out.append("")
+
+    # Tool histogram.
+    if tools:
+        items = sorted(tools.items(), key=lambda kv: (-kv[1], kv[0]))[:10]
+        max_count = items[0][1]
+        name_width = max(len(name) for name, _ in items)
+        bar_width = 8
+        out.append("*Tool usage:*")
+        out.append("```")
+        for name, count in items:
+            bar_len = max(1, (count * bar_width + max_count - 1) // max_count)
+            bar = "█" * bar_len
+            out.append(f"{name:<{name_width}}  {bar:<{bar_width}}  {count}")
+        out.append("```")
+
+    return "\n".join(out).rstrip()
 
 
 # ----------------------------------------------------------------------
@@ -441,6 +722,7 @@ def main() -> None:
 
     logger.info("Registering message handlers")
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
+    app.add_handler(CallbackQueryHandler(thinking_toggle, pattern=r"^think:"))
 
     logger.info("Starting polling (server health is probed in post_init)...")
     app.run_polling()

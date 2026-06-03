@@ -61,6 +61,9 @@ class _StubHistory:
     def clear_user(self, user_id: int) -> int:
         return 2
 
+    def get_tool_invocations(self, user_id: int) -> Dict[str, int]:
+        return {}
+
     def get_stats(self) -> Dict[str, Any]:
         return {
             "total_users": 0,

@@ -159,4 +159,23 @@ def format_stats_lines(
         f"Totals: {stats['total_messages']} messages across "
         f"{len(stats['messages_per_agent'])} agent(s)"
     )
+
+    # Tool-usage histogram (cross-cutting view across leaf tools and
+    # sub-agents). Top-N by call count, ASCII bars normalized to the
+    # max so the chart fits in any monospace block (CLI + Telegram).
+    tool_counts = {}
+    if hasattr(history_manager, "get_tool_invocations"):
+        tool_counts = history_manager.get_tool_invocations(user_id)
+    if tool_counts:
+        lines.append("")
+        lines.append("Tool usage:")
+        items = sorted(tool_counts.items(), key=lambda kv: (-kv[1], kv[0]))[:10]
+        max_count = items[0][1]
+        name_width = max(len(name) for name, _ in items)
+        bar_width = 8
+        for name, count in items:
+            bar_len = max(1, (count * bar_width + max_count - 1) // max_count)
+            bar = "█" * bar_len
+            lines.append(f"  {name:<{name_width}}  {bar:<{bar_width}}  {count}")
+
     return lines

@@ -388,7 +388,20 @@ def test_clear_handler_zero(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_stats_handler_delegates_to_server(monkeypatch: pytest.MonkeyPatch) -> None:
-    client = _CmdClient(stats={"lines": ["Scufris session stats", "Uptime: 1m"]})
+    client = _CmdClient(
+        stats={
+            "lines": ["Scufris session stats", "Uptime: 1m"],
+            "rows": {},
+            "tools": {},
+            "summary": {
+                "uptime": "1m 0s",
+                "model": "qwen3",
+                "base_url": "http://stub",
+                "total_messages": 0,
+                "total_invocations": 0,
+            },
+        }
+    )
     monkeypatch.setattr(bot, "_client", client)
     update = _make_update_double(user_id=42)
 
@@ -396,6 +409,205 @@ def test_stats_handler_delegates_to_server(monkeypatch: pytest.MonkeyPatch) -> N
 
     assert client.stats_for == [42]
     sent = [c.args[0] for c in update.message.reply_text.await_args_list]
-    # Stats are wrapped in a Markdown code fence.
-    assert any("Scufris session stats" in t for t in sent)
-    assert any(t.startswith("```") for t in sent)
+    # New format uses bold heading with emoji + Markdown formatting.
+    assert any("Scufris session" in t for t in sent)
+    # Markdown parse_mode used (rather than the old code-fence wrapping).
+    kwargs_seen = [c.kwargs for c in update.message.reply_text.await_args_list]
+    assert any(kw.get("parse_mode") == "Markdown" for kw in kwargs_seen)
+
+
+# ----------------------------------------------------------------------
+# format_telegram_stats — pure renderer
+# ----------------------------------------------------------------------
+
+
+def _stats_payload(**overrides: Any) -> dict:
+    base = {
+        "lines": [],
+        "rows": {},
+        "tools": {},
+        "summary": {
+            "uptime": "1h 23m",
+            "model": "qwen3:14b",
+            "base_url": "http://localhost:11434",
+            "total_messages": 12,
+            "total_invocations": 7,
+        },
+    }
+    base.update(overrides)
+    return base
+
+
+def test_format_telegram_stats_includes_summary_scalars() -> None:
+    text = bot.format_telegram_stats(_stats_payload())
+    assert "📊 Scufris session" in text
+    assert "1h 23m" in text
+    # Model has a colon (no escaping needed) but underscores would be
+    # escaped — check the renderer surfaces the value verbatim here.
+    assert "qwen3:14b" in text
+    assert "http://localhost:11434" in text
+
+
+def test_format_telegram_stats_escapes_underscores_in_model_name() -> None:
+    payload = _stats_payload(
+        summary={
+            "uptime": "1m",
+            "model": "qwen2_5:14b",
+            "base_url": "http://x",
+            "total_messages": 0,
+            "total_invocations": 0,
+        }
+    )
+    text = bot.format_telegram_stats(payload)
+    # Underscore should be escaped to avoid italic spans.
+    assert "qwen2\\_5:14b" in text
+
+
+def test_format_telegram_stats_renders_per_agent_table() -> None:
+    payload = _stats_payload(
+        rows={
+            "scufris": {
+                "messages": 6,
+                "tokens": 250,
+                "budget": 4000,
+                "history_disabled": False,
+                "model": "qwen3",
+                "invocations": 3,
+                "last_activity": None,
+            },
+        }
+    )
+    text = bot.format_telegram_stats(payload)
+    assert "*Per-agent:*" in text
+    assert "scufris" in text
+    assert "6 msgs" in text
+
+
+def test_format_telegram_stats_handles_iso_string_last_activity() -> None:
+    """``last_activity`` arrives as an ISO string over JSON; the renderer
+    must coerce it back to ``datetime`` before computing relative time
+    (regression for ``TypeError: unsupported operand type(s) for -``).
+    """
+    payload = _stats_payload(
+        rows={
+            "scufris": {
+                "messages": 2,
+                "tokens": 50,
+                "budget": None,
+                "history_disabled": False,
+                "model": "qwen3",
+                "invocations": 1,
+                "last_activity": "2026-06-03T13:21:11.697547Z",
+            },
+        }
+    )
+    # Should not raise.
+    text = bot.format_telegram_stats(payload)
+    assert "scufris" in text
+    # Some "ago" suffix or "just now" — definitely not the raw "—" placeholder.
+    assert ("ago" in text) or ("just now" in text)
+
+
+def test_format_telegram_stats_renders_tool_histogram() -> None:
+    payload = _stats_payload(tools={"web_search": 8, "weather": 1})
+    text = bot.format_telegram_stats(payload)
+    assert "*Tool usage:*" in text
+    assert "web_search" in text
+    assert "█" in text
+    # Bars are inside a code fence.
+    assert "```" in text
+
+
+def test_format_telegram_stats_omits_empty_sections() -> None:
+    text = bot.format_telegram_stats(_stats_payload())
+    assert "*Per-agent:*" not in text
+    assert "*Tool usage:*" not in text
+
+
+# ----------------------------------------------------------------------
+# Thinking-toggle helpers
+# ----------------------------------------------------------------------
+
+
+def test_store_thinking_evicts_oldest_beyond_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(bot, "_THINKING_CACHE_MAX", 3)
+    bot._thinking_cache.clear()
+    for i in range(5):
+        bot._store_thinking(i, f"answer-{i}", f"trace-{i}")
+    # Only the 3 most-recently-stored entries survive (FIFO eviction).
+    assert set(bot._thinking_cache.keys()) == {2, 3, 4}
+
+
+def test_thinking_keyboard_button_label_reflects_state() -> None:
+    collapsed = bot._thinking_keyboard(expanded=False)
+    expanded = bot._thinking_keyboard(expanded=True)
+    assert "Show thinking" in collapsed.inline_keyboard[0][0].text
+    assert collapsed.inline_keyboard[0][0].callback_data == "think:show"
+    assert "Hide thinking" in expanded.inline_keyboard[0][0].text
+    assert expanded.inline_keyboard[0][0].callback_data == "think:hide"
+
+
+def test_thinking_toggle_show_expands_message() -> None:
+    bot._thinking_cache.clear()
+    bot._store_thinking(101, "the answer", "step 1\nstep 2")
+
+    update = MagicMock()
+    query = MagicMock()
+    query.data = "think:show"
+    query.answer = AsyncMock()
+    query.message = MagicMock()
+    query.message.message_id = 101
+    query.message.text = "the answer"
+    query.edit_message_text = AsyncMock()
+    update.callback_query = query
+
+    asyncio.run(bot.thinking_toggle(update, MagicMock()))
+
+    query.answer.assert_awaited_once()
+    [call] = query.edit_message_text.await_args_list
+    new_text = call.args[0]
+    assert "the answer" in new_text
+    assert "step 1" in new_text
+    assert "step 2" in new_text
+    assert call.kwargs.get("parse_mode") == "Markdown"
+
+
+def test_thinking_toggle_hide_collapses_to_answer_only() -> None:
+    bot._thinking_cache.clear()
+    bot._store_thinking(202, "the answer", "noise")
+
+    update = MagicMock()
+    query = MagicMock()
+    query.data = "think:hide"
+    query.answer = AsyncMock()
+    query.message = MagicMock()
+    query.message.message_id = 202
+    query.message.text = "the answer\n\n— thinking —\nnoise"
+    query.edit_message_text = AsyncMock()
+    update.callback_query = query
+
+    asyncio.run(bot.thinking_toggle(update, MagicMock()))
+
+    [call] = query.edit_message_text.await_args_list
+    assert call.args[0] == "the answer"
+
+
+def test_thinking_toggle_stale_cache_renders_expired_notice() -> None:
+    bot._thinking_cache.clear()  # nothing cached for this message id
+
+    update = MagicMock()
+    query = MagicMock()
+    query.data = "think:show"
+    query.answer = AsyncMock()
+    query.message = MagicMock()
+    query.message.message_id = 999
+    query.message.text = "old answer"
+    query.edit_message_text = AsyncMock()
+    update.callback_query = query
+
+    asyncio.run(bot.thinking_toggle(update, MagicMock()))
+
+    [call] = query.edit_message_text.await_args_list
+    assert "expired" in call.args[0].lower()

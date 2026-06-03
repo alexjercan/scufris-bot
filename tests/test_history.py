@@ -230,3 +230,33 @@ def test_create_history_manager_returns_configured_instance():
     h = create_history_manager(max_history_per_user=7)
     assert isinstance(h, ChatHistoryManager)
     assert h.max_history_per_user == 7
+
+
+# ---------------------------------------------------------------------------
+# Per-tool invocation counter (for /stats histogram)
+# ---------------------------------------------------------------------------
+
+
+def test_record_tool_invocation_aggregates_per_user():
+    h = ChatHistoryManager()
+    h.record_tool_invocation(1, "web_search")
+    h.record_tool_invocation(1, "web_search")
+    h.record_tool_invocation(1, "weather")
+    h.record_tool_invocation(2, "web_search")
+    assert h.get_tool_invocations(1) == {"web_search": 2, "weather": 1}
+    assert h.get_tool_invocations(2) == {"web_search": 1}
+
+
+def test_get_tool_invocations_empty_for_unseen_user():
+    h = ChatHistoryManager()
+    assert h.get_tool_invocations(99) == {}
+
+
+def test_clear_user_preserves_tool_invocations():
+    """Tool counters mirror ``_invocations`` semantics: traffic, not memory."""
+    h = ChatHistoryManager()
+    h.add_user_message(1, "hi")
+    h.record_tool_invocation(1, "web_search")
+    h.record_tool_invocation(1, "web_search")
+    h.clear_user(1)
+    assert h.get_tool_invocations(1) == {"web_search": 2}

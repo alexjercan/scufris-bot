@@ -8,7 +8,7 @@ from typing import Any, Dict, List
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel
 
-from utils.stats import format_stats_lines
+from utils.stats import format_stats_lines, format_uptime
 
 from ..auth import require_token
 
@@ -25,10 +25,20 @@ class ClearResponse(BaseModel):
     breakdown: Dict[str, int]
 
 
+class StatsSummary(BaseModel):
+    uptime: str
+    model: str
+    base_url: str
+    total_messages: int
+    total_invocations: int
+
+
 class StatsResponse(BaseModel):
     user_id: int
     lines: List[str]
     rows: Dict[str, Dict[str, Any]]
+    tools: Dict[str, int] = {}
+    summary: StatsSummary
 
 
 @router.get(
@@ -47,7 +57,18 @@ async def stats(request: Request, user_id: int = Query(...)) -> StatsResponse:
         base_url=runtime.config.ollama.base_url,
     )
     rows = runtime.history_manager.get_user_telemetry(user_id)
-    return StatsResponse(user_id=user_id, lines=lines, rows=rows)
+    tools = runtime.history_manager.get_tool_invocations(user_id)
+    agg = runtime.history_manager.get_stats()
+    summary = StatsSummary(
+        uptime=format_uptime(started_at),
+        model=runtime.config.ollama.model,
+        base_url=runtime.config.ollama.base_url,
+        total_messages=agg["total_messages"],
+        total_invocations=agg["total_invocations"],
+    )
+    return StatsResponse(
+        user_id=user_id, lines=lines, rows=rows, tools=tools, summary=summary
+    )
 
 
 @router.post(

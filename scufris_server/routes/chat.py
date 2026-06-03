@@ -89,6 +89,16 @@ async def _run_turn(
     history_manager = runtime.history_manager
     agent_manager = runtime.agent_manager
 
+    # Always inject a per-user counter handler so tool histograms
+    # work for both /chat and /chat/stream. The streaming path adds
+    # its own handler (with on_thinking) on top of this — both fire
+    # independently, so each tool call is counted exactly once via
+    # this handler's on_tool_end.
+    counter_handler = ToolCallbackHandler(
+        history_manager=history_manager, user_id=user_id
+    )
+    callbacks = [counter_handler] + list(extra_callbacks or [])
+
     lock = get_user_lock(user_id)
     async with lock:
         messages = history_manager.get_history_with_new_message(user_id, message)
@@ -96,7 +106,7 @@ async def _run_turn(
         try:
             with begin_turn(f"http:{user_id}"):
                 response_text = await agent_manager.process_message(
-                    messages, user_id, extra_callbacks=extra_callbacks
+                    messages, user_id, extra_callbacks=callbacks
                 )
         finally:
             current_user_id.reset(token)
@@ -142,6 +152,9 @@ async def chat_stream(request: Request, body: ChatRequest) -> StreamingResponse:
         # the event loop so the queue is touched from the right thread.
         loop.call_soon_threadsafe(queue.put_nowait, ev)
 
+    # Streaming-only handler: emits ThinkingEvents to the SSE queue.
+    # Tool counting happens in the always-on counter handler injected
+    # by ``_run_turn`` so we don't double-count here.
     handler = ToolCallbackHandler(on_thinking=_push)
     add_user_sink(body.user_id, _push)
 

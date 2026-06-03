@@ -90,6 +90,11 @@ class ChatHistoryManager:
         self._invocations: Dict[Tuple[int, str], int] = defaultdict(int)
         self._last_activity: Dict[Tuple[int, str], datetime] = {}
 
+        # Per-(user, tool_name) call counter — covers leaf tools
+        # (web_search, weather, calculator, …) AND sub-agents. Survives
+        # /clear, mirroring ``_invocations`` semantics.
+        self._tool_invocations: Dict[Tuple[int, str], int] = defaultdict(int)
+
         self.logger.info(
             f"Initialized chat history manager (max {max_history_per_user} messages per user, main flow)"
         )
@@ -307,6 +312,29 @@ class ChatHistoryManager:
         key = (user_id, agent)
         self._invocations[key] += 1
         self._last_activity[key] = datetime.now(timezone.utc)
+
+    def record_tool_invocation(self, user_id: int, tool_name: str) -> None:
+        """Increment per-tool call counter for the given user.
+
+        Called from :class:`ToolCallbackHandler.on_tool_end` for every
+        tool that fires. Survives ``/clear`` (counters track traffic,
+        not memory contents). Sub-agent tool names are also tracked
+        here so ``/stats`` can show a unified histogram — the
+        per-agent table already has its own ``invocations`` column,
+        but the histogram is the cross-cutting view.
+        """
+        self._tool_invocations[(user_id, tool_name)] += 1
+
+    def get_tool_invocations(self, user_id: int) -> Dict[str, int]:
+        """Return ``{tool_name: count}`` for the given user.
+
+        Empty dict when the user has called no tools yet.
+        """
+        return {
+            tool: count
+            for (uid, tool), count in self._tool_invocations.items()
+            if uid == user_id and count > 0
+        }
 
     def get_user_telemetry(self, user_id: int) -> Dict[str, Dict[str, Any]]:
         """Return per-agent telemetry for the given user.

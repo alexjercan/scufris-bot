@@ -74,9 +74,10 @@ def test_format_uptime_clamps_negative_to_zero():
 
 
 class _FakeHistoryManager:
-    def __init__(self, stats, telemetry):
+    def __init__(self, stats, telemetry, tools=None):
         self._stats = stats
         self._telemetry = telemetry
+        self._tools = tools or {}
 
     def get_stats(self):
         return self._stats
@@ -84,14 +85,17 @@ class _FakeHistoryManager:
     def get_user_telemetry(self, _user_id):
         return self._telemetry
 
+    def get_tool_invocations(self, _user_id):
+        return self._tools
 
-def _render(telemetry, stats=None):
+
+def _render(telemetry, stats=None, tools=None):
     stats = stats or {
         "total_invocations": sum(t["invocations"] for t in telemetry.values()),
         "total_messages": sum(t["messages"] for t in telemetry.values()),
         "messages_per_agent": {a: t["messages"] for a, t in telemetry.items()},
     }
-    hm = _FakeHistoryManager(stats, telemetry)
+    hm = _FakeHistoryManager(stats, telemetry, tools=tools)
     started_at = NOW - timedelta(minutes=10)
     return format_stats_lines(
         hm, user_id=1, started_at=started_at, model="qwen3", base_url="http://stub"
@@ -290,3 +294,57 @@ def test_calls_column_right_aligned():
     # The "1" should be right-aligned in a 5-wide column ("calls" header).
     # i.e. preceded by spaces relative to where a "999" would sit.
     assert "    1  " in coding or "  1  " in coding
+
+
+# ---------------------------------------------------------------------------
+# Tool-usage histogram section
+# ---------------------------------------------------------------------------
+
+
+_BASE_TEL = {
+    "scufris": {
+        "messages": 2,
+        "tokens": 50,
+        "budget": 4000,
+        "history_disabled": False,
+        "model": "qwen3",
+        "invocations": 1,
+        "last_activity": NOW,
+    },
+}
+
+
+def test_tool_section_omitted_when_no_tools_used():
+    lines = _render(_BASE_TEL, tools={})
+    assert not any("Tool usage:" in line for line in lines)
+
+
+def test_tool_section_renders_sorted_by_count_desc():
+    tools = {"web_search": 8, "weather": 3, "calculator_tool": 1}
+    lines = _render(_BASE_TEL, tools=tools)
+    section = lines[lines.index("Tool usage:") :]
+    body = [line for line in section[1:] if line.strip()]
+    # Names appear in descending count order.
+    names = [line.strip().split()[0] for line in body]
+    assert names == ["web_search", "weather", "calculator_tool"]
+
+
+def test_tool_section_bar_widths_normalized_to_max():
+    tools = {"web_search": 8, "weather": 1}
+    lines = _render(_BASE_TEL, tools=tools)
+    body = [line for line in lines if "█" in line]
+    web_bar = next(line for line in body if "web_search" in line)
+    wea_bar = next(line for line in body if "weather" in line)
+    web_blocks = web_bar.count("█")
+    wea_blocks = wea_bar.count("█")
+    assert web_blocks == 8  # max == 8 → full bar
+    assert wea_blocks == 1  # 1/8 → 1 block (clamped to >=1)
+
+
+def test_tool_section_caps_to_top_ten():
+    tools = {f"tool_{i:02d}": (20 - i) for i in range(15)}
+    lines = _render(_BASE_TEL, tools=tools)
+    body = [line for line in lines if line.startswith("  tool_")]
+    assert len(body) == 10
+    assert "tool_00" in body[0]  # highest count first
+    assert "tool_09" in body[-1]
