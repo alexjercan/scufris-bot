@@ -9,6 +9,7 @@ boring to test, so we cover the contract it depends on instead.
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import List
 
 import httpx
@@ -176,6 +177,47 @@ def test_clear_returns_breakdown() -> None:
                 "cleared": 4,
                 "breakdown": {"scufris": 4},
             }
+
+    asyncio.run(go())
+
+
+def test_resolve_identity_round_trips_payload() -> None:
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == "/v1/identity/resolve"
+        seen["body"] = json.loads(request.content.decode())
+        return httpx.Response(
+            200,
+            json={
+                "user_id": 12345,
+                "username": "alex",
+                "surface": "cli",
+                "surface_id": "alex",
+                "bound_surfaces": ["cli", "telegram"],
+            },
+        )
+
+    async def go() -> None:
+        async with _client(handler) as c:
+            body = await c.resolve_identity("cli", "alex")
+            assert body["user_id"] == 12345
+            assert body["username"] == "alex"
+            assert body["bound_surfaces"] == ["cli", "telegram"]
+
+    asyncio.run(go())
+    assert seen["body"] == {"surface": "cli", "surface_id": "alex"}
+
+
+def test_resolve_identity_missing_user_id_raises_server_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"username": "alex"})
+
+    async def go() -> None:
+        async with _client(handler) as c:
+            with pytest.raises(ScufrisServerError):
+                await c.resolve_identity("cli", "alex")
 
     asyncio.run(go())
 

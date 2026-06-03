@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Any, AsyncIterator, List
+from typing import Any, AsyncIterator, Iterator, List
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -26,6 +26,18 @@ os.environ.setdefault("ALLOWED_USER_IDS", "42")
 import bot  # noqa: E402
 from scufris_client import StreamEvent  # noqa: E402
 from utils.callbacks import ThinkingEvent  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _clear_identity_cache() -> Iterator[None]:
+    """The bot caches Telegram-id → user_id resolutions for the lifetime
+    of the process; tests poke ``bot._client`` with stub doubles, so
+    leftover entries from a previous test would mask real resolve
+    behavior. Reset before *and* after each test."""
+    bot._tg_id_cache.clear()
+    yield
+    bot._tg_id_cache.clear()
+
 
 # ----------------------------------------------------------------------
 # PlaceholderRenderer formatting
@@ -197,6 +209,7 @@ class _StubClient:
     def __init__(self, events: List[StreamEvent]):
         self._events = events
         self.calls: List[tuple[int, str]] = []
+        self.identity_calls: List[tuple[str, str]] = []
 
     async def chat_stream(
         self, user_id: int, message: str
@@ -204,6 +217,22 @@ class _StubClient:
         self.calls.append((user_id, message))
         for ev in self._events:
             yield ev
+
+    async def resolve_identity(self, surface: str, surface_id: str) -> dict:
+        # Mirror legacy behavior: numeric surface_id passes through as
+        # the user_id so existing assertions keep working.
+        self.identity_calls.append((surface, surface_id))
+        try:
+            uid = int(surface_id)
+        except ValueError:
+            uid = abs(hash(surface_id))
+        return {
+            "user_id": uid,
+            "username": None,
+            "surface": surface,
+            "surface_id": surface_id,
+            "bound_surfaces": [],
+        }
 
 
 def _make_update_double(user_id: int = 42, text: str = "hello") -> MagicMock:
@@ -288,6 +317,15 @@ def test_chat_handler_handles_connection_error(
             raise ScufrisConnectionError("connection refused")
             yield  # pragma: no cover — make this an async generator
 
+        async def resolve_identity(self, surface: str, surface_id: str) -> dict:
+            return {
+                "user_id": int(surface_id),
+                "username": None,
+                "surface": surface,
+                "surface_id": surface_id,
+                "bound_surfaces": [],
+            }
+
     monkeypatch.setattr(bot, "_client", _BoomClient())
     update = _make_update_double()
     asyncio.run(bot.chat.__wrapped__(update, MagicMock()))
@@ -318,6 +356,15 @@ class _CmdClient:
     async def stats(self, user_id: int) -> dict:
         self.stats_for.append(user_id)
         return self._payloads.get("stats", {"lines": []})
+
+    async def resolve_identity(self, surface: str, surface_id: str) -> dict:
+        return {
+            "user_id": int(surface_id),
+            "username": None,
+            "surface": surface,
+            "surface_id": surface_id,
+            "bound_surfaces": [],
+        }
 
 
 def test_clear_handler_delegates_to_server(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import AsyncIterator, Optional
@@ -12,17 +11,9 @@ from typing import AsyncIterator, Optional
 from fastapi import FastAPI
 
 from .bootstrap import Runtime, build_runtime
-from .routes import admin, chat, stats
+from .routes import admin, chat, identity, stats
 
 logger = logging.getLogger("scufris-server")
-
-
-def _shutdown_grace_seconds() -> float:
-    raw = os.environ.get("SCUFRIS_SHUTDOWN_GRACE", "30")
-    try:
-        return max(0.0, float(raw))
-    except ValueError:
-        return 30.0
 
 
 @asynccontextmanager
@@ -34,11 +25,11 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
-        # Graceful shutdown: wait up to SCUFRIS_SHUTDOWN_GRACE seconds
+        # Graceful shutdown: wait up to server.shutdown_grace seconds
         # for in-flight requests to drain. We don't track every request
         # explicitly — relying on uvicorn's own task accounting via
         # the asyncio task list is good enough at this scale.
-        grace = _shutdown_grace_seconds()
+        grace = max(0.0, float(runtime.config.server.shutdown_grace))
         if grace > 0:
             current = asyncio.current_task()
             pending = [
@@ -75,5 +66,6 @@ def create_app(runtime: Optional[Runtime] = None) -> FastAPI:
 
     app.include_router(admin.router)
     app.include_router(chat.router)
+    app.include_router(identity.router)
     app.include_router(stats.router)
     return app

@@ -32,7 +32,7 @@ async def readyz(request: Request) -> Dict[str, Any]:
         return dict(cached)
 
     runtime = request.app.state.runtime
-    base_url = runtime.config.ollama_base_url
+    base_url = runtime.config.ollama.base_url
     result: Dict[str, Any]
     try:
         async with httpx.AsyncClient(timeout=2.0) as client:
@@ -58,6 +58,6 @@ async def version(request: Request) -> Dict[str, Any]:
     return {
         "name": "scufris-server",
         "version": "0.1.0",
-        "model": runtime.config.ollama_model,
-        "ollama_base_url": runtime.config.ollama_base_url,
+        "model": runtime.config.ollama.model,
+        "ollama_base_url": runtime.config.ollama.base_url,
     }

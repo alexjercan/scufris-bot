@@ -1,7 +1,10 @@
-# Home Manager module: user-level scufris install.
+# Home Manager module: per-user scufris install.
 #
-# Mirrors the option layout of `nixosModules.scufris` so users can move
-# between system-wide and per-user installs without relearning.
+# Mirrors `nixosModules.scufris`: a single free-form `settings` attrset
+# is rendered to `${XDG_CONFIG_HOME}/scufris/config.toml` via
+# `pkgs.formats.toml`, and `SCUFRIS_CONFIG` is exported as a session
+# variable so both the CLI in interactive shells and the optional
+# `systemd --user` server unit read the same file.
 #
 # Closes over the flake's `self` so the default `package` options
 # resolve via `self.packages.${system}.<name>` rather than requiring
@@ -15,27 +18,10 @@
   cfg = config.programs.scufris;
   flakePkgs = self.packages.${pkgs.system};
 
-  serverEnv =
-    {
-      SCUFRIS_BIND = cfg.server.bind;
-      SCUFRIS_PORT = toString cfg.server.port;
-      SCUFRIS_LOG_LEVEL = cfg.server.logLevel;
-    }
-    // lib.optionalAttrs (cfg.server.model != null) {
-      OLLAMA_MODEL = cfg.server.model;
-    }
-    // lib.optionalAttrs (cfg.server.ollamaUrl != null) {
-      OLLAMA_BASE_URL = cfg.server.ollamaUrl;
-    }
-    // cfg.server.extraEnvironment;
-
-  defaultClientUrl = "http://${cfg.server.bind}:${toString cfg.server.port}";
-
-  clientSessionVars =
-    lib.optionalAttrs cfg.server.enable {
-      SCUFRIS_SERVER_URL = defaultClientUrl;
-    }
-    // cfg.clientEnvironment;
+  tomlFormat = pkgs.formats.toml {};
+  configFile = tomlFormat.generate "scufris-config.toml" cfg.settings;
+  configRelPath = "scufris/config.toml";
+  configAbsPath = "${config.xdg.configHome}/${configRelPath}";
 in {
   options.programs.scufris = {
     enable = lib.mkEnableOption "scufris-cli in the user profile";
@@ -47,20 +33,31 @@ in {
       description = "The scufris-cli package to install.";
     };
 
-    clientEnvironment = lib.mkOption {
-      type = lib.types.attrsOf lib.types.str;
+    settings = lib.mkOption {
+      type = tomlFormat.type;
       default = {};
-      example = {
-        SCUFRIS_SERVER_URL = "http://127.0.0.1:8765";
-        SCUFRIS_TOKEN = "supersecret";
-      };
+      example = lib.literalExpression ''
+        {
+          user.username = "alex";
+          user.timezone = "Europe/Berlin";
+          user.identity.cli = "alex";
+          ollama.model = "qwen3:14b";
+          client.server_url = "http://127.0.0.1:8765";
+          server.bind = "127.0.0.1";
+          server.port = 8765;
+        }
+      '';
       description = ''
-        Extra session variables for the client. Merged into
-        `home.sessionVariables` and takes precedence over the auto-set
-        `SCUFRIS_SERVER_URL` from `programs.scufris.server`.
+        Free-form attrset rendered verbatim into
+        `${"\${XDG_CONFIG_HOME}"}/scufris/config.toml`. Used by both the
+        CLI (when reading `[client]`/`[user]`) and the optional
+        user-level server (when reading `[server]`/`[ollama]`/...).
+        Schema is documented in `utils/config.py`.
 
-        Note: `home.sessionVariables` only affects newly started shells
-        — re-source your shell or log out/in for them to take effect.
+        Secrets (`server.token`, `telegram.bot_token`) belong in
+        `programs.scufris.server.environmentFile` or your shell's own
+        secret-loading mechanism — env vars override matching TOML
+        keys at load time.
       '';
     };
 
@@ -74,54 +71,16 @@ in {
         description = "The scufris-server package to run as a user service.";
       };
 
-      bind = lib.mkOption {
-        type = lib.types.str;
-        default = "127.0.0.1";
-        description = "Address the user-level server binds to.";
-      };
-
-      port = lib.mkOption {
-        type = lib.types.port;
-        default = 8765;
-        description = "TCP port for the user-level server.";
-      };
-
-      logLevel = lib.mkOption {
-        type = lib.types.enum ["DEBUG" "INFO" "WARNING" "ERROR" "CRITICAL"];
-        default = "INFO";
-        description = "Log level for the user-level server.";
-      };
-
-      model = lib.mkOption {
-        type = lib.types.nullOr lib.types.str;
-        default = null;
-        example = "qwen3:latest";
-        description = "Ollama model name (mapped to OLLAMA_MODEL).";
-      };
-
-      ollamaUrl = lib.mkOption {
-        type = lib.types.nullOr lib.types.str;
-        default = null;
-        example = "http://127.0.0.1:11434";
-        description = "Ollama base URL (mapped to OLLAMA_BASE_URL).";
-      };
-
       environmentFile = lib.mkOption {
         type = lib.types.nullOr lib.types.path;
         default = null;
         example = "\${config.home.homeDirectory}/.config/scufris/env";
         description = ''
-          Path to a KEY=value file with secrets (SCUFRIS_TOKEN, ...).
-          Loaded by systemd at unit start so secrets stay out of the
-          Nix store.
+          Path to a KEY=value file with secrets (`SCUFRIS_TOKEN`,
+          `TELEGRAM_BOT_TOKEN`, ...). Loaded by systemd at unit start
+          so secrets stay out of the Nix store. Env vars override
+          matching TOML keys at load time.
         '';
-      };
-
-      extraEnvironment = lib.mkOption {
-        type = lib.types.attrsOf lib.types.str;
-        default = {};
-        example = {SCUFRIS_SHUTDOWN_GRACE = "20";};
-        description = "Extra Environment= entries for the unit.";
       };
     };
   };
@@ -131,7 +90,12 @@ in {
       [cfg.package]
       ++ lib.optional cfg.server.enable cfg.server.package;
 
-    home.sessionVariables = clientSessionVars;
+    xdg.configFile.${configRelPath}.source = configFile;
+
+    # Both the CLI in interactive shells and the user unit below read
+    # the same env var. `home.sessionVariables` only affects newly
+    # started shells — re-source or re-login to pick it up.
+    home.sessionVariables.SCUFRIS_CONFIG = configAbsPath;
 
     systemd.user.services.scufris = lib.mkIf cfg.server.enable {
       Unit = {
@@ -146,7 +110,7 @@ in {
           ExecStart = "${cfg.server.package}/bin/scufris-server";
           Restart = "on-failure";
           RestartSec = 5;
-          # Matches the server's 30s SCUFRIS_SHUTDOWN_GRACE drain.
+          # Matches the server's [server].shutdown_grace 30s drain.
           TimeoutStopSec = 35;
           KillSignal = "SIGTERM";
 
@@ -162,10 +126,9 @@ in {
           RestrictSUIDSGID = true;
           UMask = "0077";
 
-          # systemd accepts repeated Environment= lines; HM serialises
-          # a list of "KEY=value" strings into exactly that.
-          Environment =
-            lib.mapAttrsToList (n: v: "${n}=${v}") serverEnv;
+          # The unit doesn't inherit `home.sessionVariables`, so set
+          # `SCUFRIS_CONFIG` explicitly here too.
+          Environment = ["SCUFRIS_CONFIG=${configAbsPath}"];
         }
         // lib.optionalAttrs (cfg.server.environmentFile != null) {
           # Leading `-` tells systemd to ignore the file if it doesn't

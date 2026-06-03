@@ -9,26 +9,29 @@ SSE framing, routing, per-user lock semantics) is what we're exercising.
 from __future__ import annotations
 
 import asyncio
-import os
 from dataclasses import dataclass
 from typing import Any, Dict, List
 
 import httpx
-import pytest
 from httpx import ASGITransport
 
 from scufris_server.app import create_app
 from scufris_server.bootstrap import Runtime
+from utils import Config, OllamaSection, ServerSection
 
 # ----------------------------------------------------------------------
 # Stubs
 # ----------------------------------------------------------------------
 
 
-class _StubConfig:
-    ollama_model = "stub-model"
-    ollama_base_url = "http://stub:11434"
-    max_history_per_user = 20
+def _stub_config(*, token: str | None = None) -> Config:
+    """Build a real Config with the fields the routes actually touch.
+    Keeping this a real Config (rather than a duck-typed shim) means
+    the runtime sees the same shape production code does."""
+    return Config(
+        ollama=OllamaSection(model="stub-model", base_url="http://stub:11434"),
+        server=ServerSection(token=token),
+    )
 
 
 class _StubHistory:
@@ -84,9 +87,23 @@ class _StubAgentManager:
         return self.reply
 
 
-def _make_app(reply: str = "stub-reply") -> Any:
+def _make_app(
+    reply: str = "stub-reply",
+    *,
+    config: Config | None = None,
+    user_config: Any = None,
+) -> Any:
+    """Build a FastAPI app with a stub Runtime.
+
+    ``user_config`` is accepted for backwards compat with the identity
+    tests (which pass a config-with-bindings); when only it is set we
+    use it as the full Config since the unified schema collapsed the
+    two objects.
+    """
+    if config is None:
+        config = user_config if user_config is not None else _stub_config()
     runtime = Runtime(
-        config=_StubConfig(),  # type: ignore[arg-type]
+        config=config,
         history_manager=_StubHistory(),  # type: ignore[arg-type]
         agent_manager=_StubAgentManager(reply=reply),  # type: ignore[arg-type]
     )
@@ -187,9 +204,11 @@ def test_version_endpoint() -> None:
     asyncio.run(go())
 
 
-def test_bearer_auth_enforced(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SCUFRIS_TOKEN", "secret")
-    app = _make_app()
+def test_bearer_auth_enforced() -> None:
+    # Token now lives on Config (env override is applied at load_config()
+    # time, but the stub runtime bypasses that). Set it directly on the
+    # config so the route's require_token dependency sees it.
+    app = _make_app(config=_stub_config(token="secret"))
 
     async def go() -> None:
         async with _client(app) as ac:
@@ -213,10 +232,7 @@ def test_bearer_auth_enforced(monkeypatch: pytest.MonkeyPatch) -> None:
             )
             assert r.status_code == 200
 
-    try:
-        asyncio.run(go())
-    finally:
-        os.environ.pop("SCUFRIS_TOKEN", None)
+    asyncio.run(go())
 
 
 def test_chat_stream_emits_done_event() -> None:
@@ -238,5 +254,120 @@ def test_chat_stream_emits_done_event() -> None:
                         break
         assert b"event: done" in body
         assert b'"text":"streamed-reply"' in body
+
+    asyncio.run(go())
+
+
+# ----------------------------------------------------------------------
+# /v1/identity/resolve
+# ----------------------------------------------------------------------
+
+
+def _identity_app(*, username: str = "alex", **bindings: str) -> Any:
+    """Build an app whose Config has a single user with the given
+    surface bindings."""
+    from utils import UserIdentity, UserSection
+
+    cfg = Config(
+        user=UserSection(
+            username=username,
+            identity=UserIdentity(bindings=dict(bindings)),
+        )
+    )
+    return _make_app(config=cfg)
+
+
+def test_identity_resolve_matches_binding_to_username() -> None:
+    from scufris_client.client import user_id_for
+
+    app = _identity_app(telegram="42", cli="alex")
+
+    async def go() -> None:
+        async with _client(app) as ac:
+            r = await ac.post(
+                "/v1/identity/resolve",
+                json={"surface": "telegram", "surface_id": "42"},
+            )
+            assert r.status_code == 200
+            body = r.json()
+            assert body["user_id"] == user_id_for("alex")
+            assert body["username"] == "alex"
+            # Bindings should round-trip in sorted order.
+            assert body["bound_surfaces"] == ["cli", "telegram"]
+
+    asyncio.run(go())
+
+
+def test_identity_resolve_unmapped_falls_back_to_int() -> None:
+    # Empty config means we fall through to the numeric pass-through.
+    app = _make_app()
+
+    async def go() -> None:
+        async with _client(app) as ac:
+            r = await ac.post(
+                "/v1/identity/resolve",
+                json={"surface": "telegram", "surface_id": "8231376426"},
+            )
+            assert r.status_code == 200
+            body = r.json()
+            assert body["user_id"] == 8231376426
+            assert body["username"] is None
+            assert body["bound_surfaces"] == []
+
+    asyncio.run(go())
+
+
+def test_identity_resolve_text_surface_id_falls_back_to_hash() -> None:
+    from scufris_client.client import user_id_for
+
+    app = _make_app()
+
+    async def go() -> None:
+        async with _client(app) as ac:
+            r = await ac.post(
+                "/v1/identity/resolve",
+                json={"surface": "cli", "surface_id": "alex"},
+            )
+            assert r.status_code == 200
+            body = r.json()
+            # No mapping → username stays None even though hash matches.
+            assert body["user_id"] == user_id_for("alex")
+            assert body["username"] is None
+
+    asyncio.run(go())
+
+
+def test_identity_resolve_requires_auth_when_token_set() -> None:
+    app = _make_app(config=_stub_config(token="secret"))
+
+    async def go() -> None:
+        async with _client(app) as ac:
+            # Missing Authorization header.
+            r = await ac.post(
+                "/v1/identity/resolve",
+                json={"surface": "cli", "surface_id": "alex"},
+            )
+            assert r.status_code == 401
+            # With correct token works.
+            r = await ac.post(
+                "/v1/identity/resolve",
+                headers={"Authorization": "Bearer secret"},
+                json={"surface": "cli", "surface_id": "alex"},
+            )
+            assert r.status_code == 200
+
+    asyncio.run(go())
+
+
+def test_identity_resolve_rejects_empty_surface() -> None:
+    app = _make_app()
+
+    async def go() -> None:
+        async with _client(app) as ac:
+            r = await ac.post(
+                "/v1/identity/resolve",
+                json={"surface": "", "surface_id": "alex"},
+            )
+            assert r.status_code == 422  # pydantic validation
 
     asyncio.run(go())

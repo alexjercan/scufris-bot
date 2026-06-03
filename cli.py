@@ -23,12 +23,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import atexit
+import getpass
 import logging
 import os
 import readline
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 from rich.console import Console
 from rich.markdown import Markdown
@@ -46,6 +48,7 @@ from utils import (
     ThinkingEvent,
     display_name,
     is_sub_agent,
+    load_config,
     setup_logging,
     truncate_log,
 )
@@ -326,29 +329,31 @@ async def _amain(args: argparse.Namespace) -> None:
     else:
         logger = setup_logging(default_level=logging.INFO)
 
-    base_url = os.environ.get("SCUFRIS_SERVER_URL", "http://127.0.0.1:8765")
-    token = os.environ.get("SCUFRIS_TOKEN")
-    user_id = user_id_for()
+    config = load_config(require_telegram=False)
+    base_url = config.client.server_url
+    token = config.server.token
+
+    # Identity resolution order:
+    #   1. SCUFRIS_USER_ID  — explicit numeric override (skip server call).
+    #   2. SCUFRIS_USER     — surface_id sent to /v1/identity/resolve.
+    #   3. getpass.getuser() — same fallback the legacy CLI used.
+    # The local user_id_for() hash is still our offline fallback if the
+    # resolve call fails (network / older server) so the REPL stays
+    # usable even when identity isn't reachable.
+    explicit_user_id = os.environ.get("SCUFRIS_USER_ID")
+    cli_surface_id = os.environ.get("SCUFRIS_USER") or getpass.getuser()
 
     console = Console()
     _setup_readline()
 
-    if args.short_thinking:
-        full_thinking = False
-    else:
-        full_env = os.environ.get("SCUFRIS_FULL_THINKING", "").lower()
-        full_thinking = full_env not in ("0", "false", "no", "off")
+    # `--short-thinking` is a per-invocation argparse flag and always
+    # wins over the persistent default in [client].full_thinking.
+    full_thinking = config.client.full_thinking and not args.short_thinking
     settings: dict = {
         "full_thinking": full_thinking,
         "started_at": datetime.now(timezone.utc),
     }
     render_thinking = make_render_thinking(console, settings)
-
-    console.print(
-        f"[bold]Scufris CLI[/bold] → [dim]{base_url}[/dim] "
-        f"as [dim]user {user_id}[/dim] — type [bold]/help[/bold] for "
-        "commands, [bold]Ctrl-D[/bold] on empty line to exit."
-    )
 
     multiline = False
     async with ScufrisClient(base_url=base_url, token=token) as client:
@@ -369,6 +374,47 @@ async def _amain(args: argparse.Namespace) -> None:
         except ScufrisError as exc:
             console.print(f"[bold red]error:[/bold red] {exc}")
             return
+
+        # Resolve our identity now that the server is up. The result
+        # may include a friendly username and the list of bound
+        # surfaces (so we can show "Telegram is linked" in the banner).
+        username: Optional[str] = None
+        bound_surfaces: list[str] = []
+        if explicit_user_id:
+            try:
+                user_id = int(explicit_user_id)
+            except ValueError:
+                console.print(
+                    f"[bold red]SCUFRIS_USER_ID must be an integer, got "
+                    f"{explicit_user_id!r}[/bold red]"
+                )
+                return
+        else:
+            try:
+                resolved = await client.resolve_identity("cli", cli_surface_id)
+                user_id = int(resolved["user_id"])
+                username = resolved.get("username")
+                bound_surfaces = list(resolved.get("bound_surfaces") or [])
+            except ScufrisError as exc:
+                # Stay usable offline-ish: fall back to the local hash so
+                # we can still chat if the resolve endpoint is missing
+                # (older server) or has a transient hiccup.
+                logger.warning("identity resolve failed (%s); falling back", exc)
+                user_id = user_id_for(cli_surface_id)
+
+        identity_blurb = f"as [dim]user {user_id}[/dim]"
+        if username:
+            identity_blurb = f"as [bold]{username}[/bold] [dim](user {user_id})[/dim]"
+        if bound_surfaces and bound_surfaces != ["cli"]:
+            other = [s for s in bound_surfaces if s != "cli"]
+            if other:
+                identity_blurb += f" — linked surfaces: {', '.join(other)}"
+
+        console.print(
+            f"[bold]Scufris CLI[/bold] → [dim]{base_url}[/dim] {identity_blurb} — "
+            "type [bold]/help[/bold] for commands, "
+            "[bold]Ctrl-D[/bold] on empty line to exit."
+        )
 
         while True:
             try:

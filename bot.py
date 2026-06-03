@@ -25,7 +25,6 @@ Run with:  uv run scufris-bot   (the daemon must already be running)
 from __future__ import annotations
 
 import logging
-import os
 import time
 from typing import Optional
 
@@ -59,11 +58,11 @@ from utils import (
 from utils.telemetry import begin_turn
 
 logger = setup_logging(default_level=logging.INFO)
-config = load_config()
-telegram_transport = TelegramTransport(config.allowed_user_ids)
+config = load_config(require_telegram=True)
+telegram_transport = TelegramTransport(list(config.telegram.allowed_user_ids))
 
-SCUFRIS_SERVER_URL = os.environ.get("SCUFRIS_SERVER_URL", "http://127.0.0.1:8765")
-SCUFRIS_TOKEN = os.environ.get("SCUFRIS_TOKEN")
+SCUFRIS_SERVER_URL = config.client.server_url
+SCUFRIS_TOKEN = config.server.token
 
 # Telegram caps message edits at ~30/sec per chat in practice. We
 # rate-limit placeholder edits so a chatty agent run doesn't get us
@@ -86,6 +85,39 @@ def _client_or_raise() -> ScufrisClient:
     if _client is None:
         raise RuntimeError("ScufrisClient not initialised — main() didn't run")
     return _client
+
+
+# Per-process cache of Telegram-id → server user_id, populated lazily by
+# :func:`_resolve_user_id`. Restarting the bot empties it, which is fine:
+# resolution is idempotent and the next message just calls the server
+# again. Bounded only by the number of distinct allowed Telegram users,
+# so a plain dict is enough.
+_tg_id_cache: dict[int, int] = {}
+
+
+async def _resolve_user_id(client: ScufrisClient, tg_id: int) -> int:
+    """Return the server-side ``user_id`` for a Telegram numeric id.
+
+    Calls ``POST /v1/identity/resolve`` once per Telegram id and caches
+    the result for the lifetime of this process. On error (e.g. talking
+    to an older server without the endpoint) we fall back to the raw
+    Telegram id — the legacy wire shape — so the bot stays usable.
+    """
+    cached = _tg_id_cache.get(tg_id)
+    if cached is not None:
+        return cached
+    try:
+        body = await client.resolve_identity("telegram", str(tg_id))
+        user_id = int(body["user_id"])
+    except ScufrisError as exc:
+        logger.warning(
+            "identity resolve failed for telegram:%s (%s); using raw id",
+            tg_id,
+            exc,
+        )
+        user_id = tg_id
+    _tg_id_cache[tg_id] = user_id
+    return user_id
 
 
 # ----------------------------------------------------------------------
@@ -191,7 +223,7 @@ class PlaceholderRenderer:
 # ----------------------------------------------------------------------
 
 
-@restricted(config.allowed_user_ids)
+@restricted(list(config.telegram.allowed_user_ids))
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle a regular chat message by streaming the server's response."""
     request_start = time.time()
@@ -201,15 +233,15 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     user_info = telegram_transport.get_user_info(update)
-    user_id = user_info["id"]
+    tg_id = user_info["id"]
 
     logger.info(
-        f"User {user_info['username']} (ID:{user_id}): "
-        f"{truncate_log(user_message, 100)}"
+        f"User {user_info['username']} (ID:{tg_id}): {truncate_log(user_message, 100)}"
     )
 
     assert update.message is not None, "Update has no message"
     client = _client_or_raise()
+    user_id = await _resolve_user_id(client, tg_id)
 
     # Fire a typing action and post a placeholder we can edit.
     await telegram_transport.send_typing_action(update)
@@ -220,7 +252,7 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     error_text: Optional[str] = None
 
     try:
-        with begin_turn(f"telegram:{user_id}"):
+        with begin_turn(f"telegram:{tg_id}"):
             async for ev in client.chat_stream(user_id, user_message):
                 if ev.kind == "thinking" and ev.thinking is not None:
                     renderer.add(ev.thinking)
@@ -282,13 +314,14 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
-@restricted(config.allowed_user_ids)
+@restricted(list(config.telegram.allowed_user_ids))
 async def clear_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Clear chat history for the user (delegates to the server)."""
     user_info = telegram_transport.get_user_info(update)
-    user_id = user_info["id"]
+    tg_id = user_info["id"]
     assert update.message is not None, "Update has no message"
     client = _client_or_raise()
+    user_id = await _resolve_user_id(client, tg_id)
 
     try:
         result = await client.clear(user_id)
@@ -300,7 +333,7 @@ async def clear_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     breakdown = result.get("breakdown") or {}
 
     logger.info(
-        f"Cleared {cleared} messages for user {user_info['username']} (ID:{user_id})"
+        f"Cleared {cleared} messages for user {user_info['username']} (ID:{tg_id})"
     )
 
     if cleared == 0:
@@ -314,13 +347,14 @@ async def clear_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await update.message.reply_text(msg)
 
 
-@restricted(config.allowed_user_ids)
+@restricted(list(config.telegram.allowed_user_ids))
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show per-agent memory + telemetry breakdown (delegates to the server)."""
     user_info = telegram_transport.get_user_info(update)
-    user_id = user_info["id"]
+    tg_id = user_info["id"]
     assert update.message is not None, "Update has no message"
     client = _client_or_raise()
+    user_id = await _resolve_user_id(client, tg_id)
 
     try:
         result = await client.stats(user_id)
@@ -392,10 +426,10 @@ def main() -> None:
     logger.info(f"Will connect to scufris-server at {SCUFRIS_SERVER_URL}")
 
     # require_telegram=True (the default in load_config) guarantees this.
-    assert config.telegram_bot_token is not None
+    assert config.telegram.bot_token is not None
     app = (
         ApplicationBuilder()
-        .token(config.telegram_bot_token)
+        .token(config.telegram.bot_token)
         .post_init(_post_init)
         .post_shutdown(_post_shutdown)
         .build()

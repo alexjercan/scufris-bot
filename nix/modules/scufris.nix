@@ -1,3 +1,14 @@
+# NixOS module: system-wide scufris-server install.
+#
+# Configuration mirrors the TOML schema 1:1: `services.scufris.settings`
+# is a free-form attrset rendered to `/etc/scufris/config.toml` via
+# `pkgs.formats.toml`. The systemd unit gets `SCUFRIS_CONFIG` pointing
+# at that file and otherwise inherits no Scufris-specific environment.
+#
+# Secrets (telegram bot token, server token) are still injected via
+# `environmentFile` — env vars override matching TOML keys at load
+# time, so secrets stay out of the Nix store while everything else
+# lives declaratively in the module.
 {
   config,
   lib,
@@ -6,18 +17,13 @@
 }: let
   cfg = config.services.scufris;
 
-  # Build the Environment= list. Always include bind/port. Include
-  # ollama bits only when the user set them so we don't override
-  # whatever the application defaults to.
-  baseEnv =
-    {
-      SCUFRIS_BIND = cfg.bind;
-      SCUFRIS_PORT = toString cfg.port;
-      SCUFRIS_LOG_LEVEL = cfg.logLevel;
-    }
-    // lib.optionalAttrs (cfg.model != null) {OLLAMA_MODEL = cfg.model;}
-    // lib.optionalAttrs (cfg.ollamaUrl != null) {OLLAMA_BASE_URL = cfg.ollamaUrl;}
-    // cfg.extraEnvironment;
+  tomlFormat = pkgs.formats.toml {};
+  configFile = tomlFormat.generate "scufris-config.toml" cfg.settings;
+
+  # Pull the listen port out of `settings` so `openFirewall` and the
+  # documentation refer to the same value the daemon will actually use.
+  # Falls back to the application default when unset.
+  effectivePort = cfg.settings.server.port or 8765;
 in {
   options.services.scufris = {
     enable = lib.mkEnableOption "Scufris HTTP agent server";
@@ -29,40 +35,36 @@ in {
       description = "The scufris-server package to run.";
     };
 
-    bind = lib.mkOption {
-      type = lib.types.str;
-      default = "127.0.0.1";
-      description = "Address the HTTP server binds to (SCUFRIS_BIND).";
-    };
-
-    port = lib.mkOption {
-      type = lib.types.port;
-      default = 8765;
-      description = "TCP port the HTTP server listens on (SCUFRIS_PORT).";
-    };
-
-    logLevel = lib.mkOption {
-      type = lib.types.enum ["DEBUG" "INFO" "WARNING" "ERROR" "CRITICAL"];
-      default = "INFO";
-      description = "Log level forwarded as SCUFRIS_LOG_LEVEL.";
-    };
-
-    model = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-      example = "qwen3:latest";
-      description = ''
-        Ollama model name. Mapped to OLLAMA_MODEL — the env var the
-        agent reads (the task spec calls this SCUFRIS_MODEL; the option
-        keeps the friendlier name).
+    settings = lib.mkOption {
+      type = tomlFormat.type;
+      default = {};
+      example = lib.literalExpression ''
+        {
+          user.username = "alex";
+          user.timezone = "Europe/Berlin";
+          user.identity = {
+            telegram = 8231376426;
+            cli = "alex";
+          };
+          ollama = {
+            model = "qwen3:14b";
+            base_url = "http://127.0.0.1:11434";
+          };
+          server = {
+            bind = "127.0.0.1";
+            port = 8765;
+          };
+          telegram.allowed_user_ids = [ 8231376426 ];
+        }
       '';
-    };
-
-    ollamaUrl = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-      example = "http://127.0.0.1:11434";
-      description = "Ollama base URL. Mapped to OLLAMA_BASE_URL.";
+      description = ''
+        Free-form attrset rendered verbatim into
+        `/etc/scufris/config.toml`. The full schema is documented in
+        `utils/config.py`. Secrets (`telegram.bot_token`,
+        `server.token`) belong in `environmentFile`, not here — env
+        vars override the TOML at load time so the secret never enters
+        the Nix store.
+      '';
     };
 
     environmentFile = lib.mkOption {
@@ -70,17 +72,12 @@ in {
       default = null;
       example = "/run/secrets/scufris.env";
       description = ''
-        Path to a file containing KEY=value lines with secrets
-        (SCUFRIS_TOKEN, TELEGRAM_BOT_TOKEN, ...). Loaded by systemd at
-        unit start time so secrets never end up in the Nix store.
+        Path to a file containing `KEY=value` lines with secrets:
+        `TELEGRAM_BOT_TOKEN`, `SCUFRIS_TOKEN`. Loaded by systemd at
+        unit start so secrets never end up in the Nix store. Env vars
+        override matching TOML keys (`telegram.bot_token`,
+        `server.token`) at load time.
       '';
-    };
-
-    extraEnvironment = lib.mkOption {
-      type = lib.types.attrsOf lib.types.str;
-      default = {};
-      example = {SCUFRIS_SHUTDOWN_GRACE = "20";};
-      description = "Additional Environment= entries for the unit.";
     };
 
     openFirewall = lib.mkOption {
@@ -117,7 +114,10 @@ in {
   };
 
   config = lib.mkIf cfg.enable {
-    networking.firewall.allowedTCPPorts = lib.mkIf cfg.openFirewall [cfg.port];
+    networking.firewall.allowedTCPPorts =
+      lib.mkIf cfg.openFirewall [effectivePort];
+
+    environment.etc."scufris/config.toml".source = configFile;
 
     systemd.services.scufris = {
       description = "Scufris HTTP agent server";
@@ -125,7 +125,10 @@ in {
       after = ["network-online.target"];
       wants = ["network-online.target"];
 
-      environment = baseEnv;
+      # The only env var the unit needs: where to find its config.
+      # All other settings live in the TOML; secrets come from
+      # `environmentFile`.
+      environment.SCUFRIS_CONFIG = "/etc/scufris/config.toml";
 
       serviceConfig =
         {
@@ -135,7 +138,7 @@ in {
           Restart = "on-failure";
           RestartSec = 5;
 
-          # Server's app.py honours SCUFRIS_SHUTDOWN_GRACE (default 30s)
+          # Server's app.py honours [server].shutdown_grace (default 30s)
           # and waits for in-flight requests on SIGTERM. Give it a few
           # extra seconds before systemd escalates to SIGKILL.
           TimeoutStopSec = 35;

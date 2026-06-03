@@ -43,8 +43,8 @@ async def stats(request: Request, user_id: int = Query(...)) -> StatsResponse:
         runtime.history_manager,
         user_id,
         started_at=started_at,
-        model=runtime.config.ollama_model,
-        base_url=runtime.config.ollama_base_url,
+        model=runtime.config.ollama.model,
+        base_url=runtime.config.ollama.base_url,
     )
     rows = runtime.history_manager.get_user_telemetry(user_id)
     return StatsResponse(user_id=user_id, lines=lines, rows=rows)

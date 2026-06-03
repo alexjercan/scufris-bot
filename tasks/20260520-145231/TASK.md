@@ -1,6 +1,6 @@
 # User identity, XDG config, and CLI/Telegram session unification
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 80
 - TAGS: identity,config,ux,backlog
 
@@ -128,3 +128,25 @@ Small touches that make the cross-surface experience feel seamless rather than a
 - `/stats` shows active surfaces: `surfaces: cli (last seen 2m ago), telegram (last seen 1h ago)`
 - `/clear` clears history for the user across all surfaces, not just the one you typed it in
 - Server returns a `surface` field in the stats response so the CLI can say "your Telegram is linked as @yourhandle"
+
+## Resolution
+
+Shipped 2026-06-03 as the v1 minimum-viable slice.
+
+What landed:
+- New `utils/user_config.py`: TOML schema + lookup `$SCUFRIS_CONFIG → $XDG_CONFIG_HOME/scufris/config.toml → ~/.config/scufris/config.toml`. Parses `[user]`, `[user.identity]`, `[user.journal]`, `[server]`. Unknown top-level keys log a warning instead of failing. Missing file is OK (returns defaults).
+- Identity stays config-only — no SQLite, no `/start` link flow. `[user.identity]` maps `surface → surface_id` (e.g. `telegram = 8231376426`, `cli = "alex"`).
+- New endpoint `POST /v1/identity/resolve` (`scufris_server/routes/identity.py`) wraps `resolve_user_id`. Auth-protected. Returns `{user_id, username, surface, surface_id, bound_surfaces}`.
+- New `ScufrisClient.resolve_identity(surface, surface_id)`. CLI calls it once at startup (`SCUFRIS_USER_ID` still wins as override; falls back to local hash on network error). Bot caches per-Telegram-id results in `_tg_id_cache` and resolves once per user per process.
+- Cross-surface unification: when both `cli` and `telegram` bindings name the same `username`, both surfaces hash to the same `user_id`, so `/clear` automatically affects both.
+- `Runtime` gained `user_config: UserConfig` (loaded from `load_user_config()` in `bootstrap.build_runtime`).
+- Tests: 25 new (18 in `tests/test_user_config.py`, 5 in `tests/test_server.py` for the endpoint, 2 in `tests/test_cli_client.py` for the client method). Existing `tests/test_bot.py` updated with stub `resolve_identity` methods + cache-reset fixture. Total: 340 tests pass.
+- `nix flake check` green.
+- README has a new "Config file" section.
+
+Deferred (out of scope for this PR — file as new tasks if/when needed):
+- Multi-user. Schema is single-user; widening to `[[users]]` is a future change.
+- SIGHUP hot-reload — explicitly skipped per spec.
+- Plumbing `[user.journal].den_path` into `utils/tools/journal_tools.py`. The field is parsed and exposed but not yet read by the journal tools (which all branch on `if den_path != DEFAULT_DEN_PATH`). Would require rewriting all ten tool functions.
+- `[server]` config values (bind/port/token) are parsed but informational; env vars (`SCUFRIS_BIND`, `SCUFRIS_PORT`, `SCUFRIS_TOKEN`) still take precedence.
+- Surface-aware `/stats` ("last seen" timestamps). `bound_surfaces` is exposed in the resolve reply but no UI consumes it yet.

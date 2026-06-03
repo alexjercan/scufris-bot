@@ -249,6 +249,25 @@ class ScufrisClient:
     async def clear(self, user_id: int) -> Dict[str, Any]:
         return await self._json("POST", "/v1/clear", json={"user_id": user_id})
 
+    async def resolve_identity(self, surface: str, surface_id: str) -> Dict[str, Any]:
+        """Map a surface_id to a canonical user_id via the server.
+
+        The wire shape is documented in :mod:`scufris_server.routes.identity`:
+        the response always carries ``user_id`` (int) and may carry
+        ``username`` (str) when the config matched a configured user.
+        Falls back to a deterministic hash / numeric pass-through when
+        no mapping is configured — clients can rely on getting *some*
+        ``user_id`` back as long as the server is reachable.
+        """
+        body = await self._json(
+            "POST",
+            "/v1/identity/resolve",
+            json={"surface": surface, "surface_id": surface_id},
+        )
+        if not isinstance(body.get("user_id"), int):
+            raise ScufrisServerError(f"missing 'user_id' in identity reply: {body!r}")
+        return body
+
     async def chat(self, user_id: int, message: str) -> str:
         body = await self._json(
             "POST", "/v1/chat", json={"user_id": user_id, "message": message}

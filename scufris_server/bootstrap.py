@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from utils import (
     AgentManager,
     ChatHistoryManager,
+    Config,
     ToolCallbackHandler,
     create_agent_manager,
     create_compactor,
@@ -27,7 +28,6 @@ from utils import (
     load_config,
     setup_scufris,
 )
-from utils.config import Config
 
 from .locks import dispatch_event
 
@@ -47,7 +47,7 @@ def build_runtime() -> Runtime:
 
     config = load_config(require_telegram=False)
     history_manager = create_history_manager(
-        config.max_history_per_user, compactor=create_compactor()
+        config.history.max_per_user, compactor=create_compactor()
     )
     main_agent = setup_scufris(config=config, history_manager=history_manager)
 

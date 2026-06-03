@@ -386,15 +386,15 @@ def create_sub_agent(
             agent=name,
             token_budget=history_token_budget if keeps_history else None,
             history_disabled=not keeps_history,
-            model=config.ollama_model,
+            model=config.ollama.model,
         )
 
     # Create the LLM for the sub-agent
     llm = ChatOllama(
-        model=config.ollama_model,
-        reasoning=config.ollama_reasoning,
-        base_url=config.ollama_base_url,
-        temperature=config.ollama_temperature,
+        model=config.ollama.model,
+        reasoning=config.ollama.reasoning,
+        base_url=config.ollama.base_url,
+        temperature=config.ollama.temperature,
     )
 
     # Phase 3: history-keeping agents get per-slice `remember` /
@@ -786,10 +786,10 @@ def setup_scufris(
 
     # Create the LLM for the main agent
     llm = ChatOllama(
-        model=config.ollama_model,
-        reasoning=config.ollama_reasoning,
-        base_url=config.ollama_base_url,
-        temperature=config.ollama_temperature,
+        model=config.ollama.model,
+        reasoning=config.ollama.reasoning,
+        base_url=config.ollama.base_url,
+        temperature=config.ollama.temperature,
     )
 
     # Create the main agent. The main flow keeps history (under the
@@ -813,7 +813,7 @@ def setup_scufris(
         agent=SCUFRIS_AGENT,
         token_budget=None,
         history_disabled=False,
-        model=config.ollama_model,
+        model=config.ollama.model,
     )
 
     logger.info("Scufris Bot agent hierarchy setup complete")

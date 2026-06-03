@@ -45,10 +45,10 @@ class _StubAgent:
 
 def _make_config():
     cfg = MagicMock()
-    cfg.ollama_model = "stub-model"
-    cfg.ollama_reasoning = False
-    cfg.ollama_base_url = "http://stub"
-    cfg.ollama_temperature = 0.0
+    cfg.ollama.model = "stub-model"
+    cfg.ollama.reasoning = False
+    cfg.ollama.base_url = "http://stub"
+    cfg.ollama.temperature = 0.0
     return cfg
 
 

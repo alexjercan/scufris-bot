@@ -28,9 +28,13 @@ pkgs.testers.nixosTest {
 
     services.scufris = {
       enable = true;
-      bind = "127.0.0.1";
-      port = 8765;
-      logLevel = "INFO";
+      settings = {
+        server = {
+          bind = "127.0.0.1";
+          port = 8765;
+          log_level = "INFO";
+        };
+      };
     };
 
     environment.systemPackages = [pkgs.curl];

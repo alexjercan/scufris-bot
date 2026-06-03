@@ -47,11 +47,13 @@ hardened systemd unit.
         {
           services.scufris = {
             enable = true;
-            bind = "127.0.0.1";
-            port = 8765;
-            ollamaUrl = "http://127.0.0.1:11434";
-            model = "qwen3:latest";
-            environmentFile = "/run/secrets/scufris.env";  # optional
+            settings = {
+              server.bind = "127.0.0.1";
+              server.port = 8765;
+              ollama.base_url = "http://127.0.0.1:11434";
+              ollama.model = "qwen3:latest";
+            };
+            environmentFile = "/run/secrets/scufris.env";  # optional; SCUFRIS_TOKEN, TELEGRAM_BOT_TOKEN
           };
         }
       ];
@@ -70,7 +72,14 @@ Python ML libraries need W+X pages; flip
 your real model backend.
 
 `SIGTERM` triggers a graceful drain (default 30s, tunable via
-`SCUFRIS_SHUTDOWN_GRACE`); `TimeoutStopSec` is set to `35s` to match.
+`settings.server.shutdown_grace`); `TimeoutStopSec` is set to `35s` to
+match.
+
+The full config schema lives in `utils/config.py`; the module's
+`settings` is rendered verbatim to `/etc/scufris/config.toml` via
+`pkgs.formats.toml`. Secrets (`SCUFRIS_TOKEN`, `TELEGRAM_BOT_TOKEN`) go
+in `environmentFile` — env vars override matching TOML keys at load
+time so secrets stay out of the Nix store.
 
 The flake's `checks.<system>.scufris-vm` boots a NixOS VM, enables the
 service, hits `/v1/healthz`, asserts the security score budget, and
@@ -90,25 +99,30 @@ installs `scufris-cli` and can optionally run `scufris-server` as a
   programs.scufris = {
     enable = true;
 
+    settings = {
+      user.username = "alex";
+      user.identity.cli = "alex";
+      ollama.model = "qwen3:latest";
+      ollama.base_url = "http://127.0.0.1:11434";
+      client.server_url = "http://127.0.0.1:8765";
+    };
+
     # Optional: also run the daemon as a user service.
     server = {
       enable = true;
-      bind = "127.0.0.1";
-      port = 8765;
-      model = "qwen3:latest";
-      ollamaUrl = "http://127.0.0.1:11434";
       environmentFile = "${config.home.homeDirectory}/.config/scufris/env";
     };
   };
 }
 ```
 
-When `server.enable = true`, `SCUFRIS_SERVER_URL` is auto-injected into
-`home.sessionVariables` so a fresh shell's `scufris-cli` connects to
-the user daemon with no extra setup. Add `SCUFRIS_TOKEN` (or anything
-else) via `programs.scufris.clientEnvironment`. Note that
-`home.sessionVariables` only takes effect for **new** shells — re-source
-or log out/in after the first switch.
+The module renders `settings` to `${"$XDG_CONFIG_HOME"}/scufris/config.toml`
+and exports `SCUFRIS_CONFIG` as a session variable so both the CLI and
+the optional user-level server read the same file. Secrets
+(`SCUFRIS_TOKEN`, `TELEGRAM_BOT_TOKEN`) go in `server.environmentFile`
+— env vars override TOML keys at load time. Note that
+`home.sessionVariables` only takes effect for **new** shells —
+re-source or log out/in after the first switch.
 
 `systemctl --user status scufris` / `journalctl --user -u scufris`
 inspect the unit. The user-level unit applies the subset of systemd
@@ -165,6 +179,60 @@ edits it in place with a depth-aware "tool calls / sub-agents asked"
 trail (rate-limited to ~1 edit/sec). The placeholder is deleted when
 the final answer arrives so your scrollback only retains the answer
 itself.
+
+## Config file
+
+Both front-ends and the server read a single TOML config file. Lookup
+order (first hit wins, missing file is OK):
+
+1. `$SCUFRIS_CONFIG`
+2. `$XDG_CONFIG_HOME/scufris/config.toml`
+3. `~/.config/scufris/config.toml`
+
+The full schema lives in `utils/config.py`. Sections: `[user]`,
+`[user.identity]`, `[user.journal]`, `[telegram]`, `[ollama]`,
+`[history]`, `[server]`, `[client]`. A useful starting shape:
+
+```toml
+[user]
+username = "alex"          # canonical name; hashed into the wire user_id
+timezone = "Europe/Berlin"
+
+[user.identity]
+# surface_id values that should resolve to the same user_id as `username`.
+# Telegram ids are bare integers; the CLI key is whatever
+# `getpass.getuser()` returns (or `$SCUFRIS_USER`).
+telegram = 8231376426
+cli      = "alex"
+
+[ollama]
+model    = "qwen3:latest"
+base_url = "http://127.0.0.1:11434"
+
+[server]
+bind = "127.0.0.1"
+port = 8765
+# token = "..."            # SECRET — leave in env (SCUFRIS_TOKEN)
+
+[client]
+server_url = "http://127.0.0.1:8765"
+
+[telegram]
+allowed_user_ids = [8231376426]
+# bot_token = "..."        # SECRET — leave in env (TELEGRAM_BOT_TOKEN)
+```
+
+Environment variables override matching TOML keys at load time —
+secrets (`SCUFRIS_TOKEN`, `TELEGRAM_BOT_TOKEN`) belong in env, the
+rest belongs in the file. The full env→TOML map is documented in the
+module docstring of `utils/config.py`.
+
+When a surface_id matches an `[user.identity]` binding,
+`POST /v1/identity/resolve` returns the same `user_id` for both `cli`
+and `telegram` — so `/clear` from one surface clears history on the
+other. Without a config the bot falls back to passing the raw Telegram
+numeric id and the CLI hashes `getpass.getuser()`, exactly like the
+pre-config behavior.
 
 ## Debugging
 
