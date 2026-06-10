@@ -19,7 +19,6 @@ from .journal_tools import (
     today_create_tool,
     weight_entry_tool,
 )
-from .opencode_tool import opencode_tool
 from .weather_tool import weather_tool
 from .web_search import web_search_tool
 
@@ -34,7 +33,6 @@ __all__ = [
     "macros_search_tool",
     "notes_entry_tool",
     "notes_filter_tool",
-    "opencode_tool",
     "tasks_entry_tool",
     "tasks_remove_tool",
     "tasks_toggle_tool",

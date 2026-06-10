@@ -192,6 +192,7 @@
             scufris-vm = import ./nix/tests/scufris-vm.nix {
               inherit pkgs;
               scufrisModule = self.nixosModules.scufris;
+              opencodeServeModule = self.nixosModules.opencode-serve;
               scufrisPackage = self'.packages.scufris-server;
             };
           };
@@ -226,6 +227,7 @@
         # those are more easily expressed in perSystem.
 
         nixosModules.scufris = import ./nix/modules/scufris.nix;
+        nixosModules.opencode-serve = import ./nix/modules/opencode-serve.nix;
         nixosModules.default = self.nixosModules.scufris;
 
         # New module: scufris-cli + optional scufris-server user unit.

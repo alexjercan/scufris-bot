@@ -5,13 +5,12 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import AsyncIterator, List, Optional
+from typing import AsyncIterator, Callable, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
-from utils import ToolCallbackHandler
 from utils.callbacks import ThinkingEvent
 from utils.telemetry import begin_turn
 
@@ -78,26 +77,21 @@ async def _run_turn(
     request: Request,
     user_id: int,
     message: str,
-    extra_callbacks: Optional[List] = None,
+    extra_callbacks: Optional[List[Callable[[ThinkingEvent], None]]] = None,
 ) -> str:
     """Push a user message through the agent, persisting history.
 
     Wraps the call in ``begin_turn`` (telemetry correlation) and the
     per-user lock (so two requests from the same user are serialised).
+    Tool histograms (``record_tool_invocation``) are now driven by the
+    :class:`AgentManager` directly off OpenCode events, so this path
+    no longer wires a separate counter handler.
     """
     runtime = request.app.state.runtime
     history_manager = runtime.history_manager
     agent_manager = runtime.agent_manager
 
-    # Always inject a per-user counter handler so tool histograms
-    # work for both /chat and /chat/stream. The streaming path adds
-    # its own handler (with on_thinking) on top of this — both fire
-    # independently, so each tool call is counted exactly once via
-    # this handler's on_tool_end.
-    counter_handler = ToolCallbackHandler(
-        history_manager=history_manager, user_id=user_id
-    )
-    callbacks = [counter_handler] + list(extra_callbacks or [])
+    callbacks = list(extra_callbacks or [])
 
     lock = get_user_lock(user_id)
     async with lock:
@@ -147,21 +141,17 @@ async def chat_stream(request: Request, body: ChatRequest) -> StreamingResponse:
     loop = asyncio.get_running_loop()
 
     def _push(ev: ThinkingEvent) -> None:
-        # Called from the agent thread (LangChain callbacks may run on
-        # whichever thread the runnable was invoked on). Bounce onto
-        # the event loop so the queue is touched from the right thread.
+        # Bounce the event onto the loop's thread (the agent's listener
+        # may be invoked from a worker thread depending on the client
+        # implementation; queue ops must touch the loop).
         loop.call_soon_threadsafe(queue.put_nowait, ev)
 
-    # Streaming-only handler: emits ThinkingEvents to the SSE queue.
-    # Tool counting happens in the always-on counter handler injected
-    # by ``_run_turn`` so we don't double-count here.
-    handler = ToolCallbackHandler(on_thinking=_push)
     add_user_sink(body.user_id, _push)
 
     async def _runner() -> None:
         try:
             text = await _run_turn(
-                request, body.user_id, body.message, extra_callbacks=[handler]
+                request, body.user_id, body.message, extra_callbacks=[_push]
             )
             await queue.put(_Done(text))
         except Exception as exc:  # noqa: BLE001

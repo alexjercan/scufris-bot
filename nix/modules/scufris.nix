@@ -24,6 +24,13 @@
   # documentation refer to the same value the daemon will actually use.
   # Falls back to the application default when unset.
   effectivePort = cfg.settings.server.port or 8765;
+
+  # Auto-wire the OpenCode daemon when its module is enabled in the
+  # same config. The user can override by setting
+  # `services.scufris.environment.OPENCODE_BASE_URL` explicitly
+  # (mkDefault loses to mkForce / direct assignment).
+  opencodeEnabled = config.services.opencode-serve.enable or false;
+  opencodeUrl = config.services.opencode-serve.url or null;
 in {
   options.services.scufris = {
     enable = lib.mkEnableOption "Scufris HTTP agent server";
@@ -64,6 +71,27 @@ in {
         `server.token`) belong in `environmentFile`, not here — env
         vars override the TOML at load time so the secret never enters
         the Nix store.
+      '';
+    };
+
+    environment = lib.mkOption {
+      type = lib.types.attrsOf lib.types.str;
+      default = {};
+      example = lib.literalExpression ''
+        {
+          OPENCODE_BASE_URL = "http://127.0.0.1:4096";
+          OPENCODE_PROVIDER_ID = "github-copilot";
+          OPENCODE_MODEL_ID = "claude-sonnet-4";
+        }
+      '';
+      description = ''
+        Extra environment variables to set on the unit, merged with
+        `SCUFRIS_CONFIG`. When `services.opencode-serve` is enabled in
+        the same config, `OPENCODE_BASE_URL` is auto-populated from
+        `services.opencode-serve.url`; set it here to override.
+
+        Use `environmentFile` for secrets — values set here end up in
+        the Nix store via the unit definition.
       '';
     };
 
@@ -123,16 +151,36 @@ in {
 
     environment.etc."scufris/config.toml".source = configFile;
 
+    # Auto-wire OPENCODE_BASE_URL from the sibling module's computed
+    # URL. mkDefault means an explicit `services.scufris.environment`
+    # entry wins; if the opencode module is disabled the value is
+    # simply absent and the runtime uses its own default
+    # (`http://127.0.0.1:4096`).
+    services.scufris.environment = lib.mkIf (opencodeEnabled && opencodeUrl != null) {
+      OPENCODE_BASE_URL = lib.mkDefault opencodeUrl;
+    };
+
     systemd.services.scufris = {
       description = "Scufris HTTP agent server";
       wantedBy = ["multi-user.target"];
-      after = ["network-online.target"];
-      wants = ["network-online.target"];
+      after =
+        ["network-online.target"]
+        ++ lib.optional opencodeEnabled "opencode-serve.service";
+      wants =
+        ["network-online.target"]
+        # Soft dep on OpenCode (`Wants=`, not `Requires=`): if the
+        # daemon is down the scufris unit still starts and `/v1/readyz`
+        # reports degraded — preferable to having the public HTTP
+        # endpoint vanish entirely.
+        ++ lib.optional opencodeEnabled "opencode-serve.service";
 
-      # The only env var the unit needs: where to find its config.
-      # All other settings live in the TOML; secrets come from
-      # `environmentFile`.
-      environment.SCUFRIS_CONFIG = "/etc/scufris/config.toml";
+      # SCUFRIS_CONFIG is mandatory; everything else is user-controlled
+      # via `services.scufris.environment` (with auto-wiring above).
+      environment =
+        {
+          SCUFRIS_CONFIG = "/etc/scufris/config.toml";
+        }
+        // cfg.environment;
 
       serviceConfig =
         {

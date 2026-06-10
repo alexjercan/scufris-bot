@@ -1,7 +1,7 @@
 # Proactive follow-up suggestions in agent prompts
 
 - STATUS: OPEN
-- PRIORITY: 60
+- PRIORITY: 0
 - TAGS: ux,prompts,backlog
 
 Primarily a prompt engineering task, but with a small structural hook.

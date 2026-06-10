@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List
 
 import httpx
@@ -89,6 +90,36 @@ class _StubAgentManager:
         await asyncio.sleep(0.01)
         return self.reply
 
+    async def delete_session(self, user_id: int) -> None:
+        # ``/v1/clear`` calls this to forget the OpenCode session
+        # backing this user. The real implementation tolerates absence
+        # silently; the stub mirrors that.
+        return None
+
+
+class _StubOpenCodeClient:
+    """Minimal stand-in for :class:`utils.OpenCodeClient`.
+
+    Only the attributes touched by the routes under test are populated:
+    ``/v1/version`` reads ``base_url``, ``provider_id`` and ``model_id``.
+    The lifespan-driven ``aclose()`` is bypassed in tests because
+    ``create_app(runtime=...)`` skips the lifespan.
+    """
+
+    def __init__(
+        self,
+        *,
+        base_url: str = "http://stub-opencode:4096",
+        provider_id: str = "stub-provider",
+        model_id: str = "stub-opencode-model",
+    ) -> None:
+        self.base_url = base_url
+        self.provider_id = provider_id
+        self.model_id = model_id
+
+    async def aclose(self) -> None:  # pragma: no cover — lifespan bypassed
+        return None
+
 
 def _make_app(
     reply: str = "stub-reply",
@@ -105,10 +136,22 @@ def _make_app(
     """
     if config is None:
         config = user_config if user_config is not None else _stub_config()
+    # Tests run with create_app(runtime=...) which skips the lifespan,
+    # so the SessionStore here is just a placeholder satisfying the
+    # dataclass — its file is never written or read by the routes
+    # exercised below. Pointing at a tmp path keeps stray writes
+    # (if any future route mutates it) out of <repo>/data.
+    import tempfile
+
+    from utils import SessionStore
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix="scufris-test-store-"))
     runtime = Runtime(
         config=config,
         history_manager=_StubHistory(),  # type: ignore[arg-type]
         agent_manager=_StubAgentManager(reply=reply),  # type: ignore[arg-type]
+        opencode_client=_StubOpenCodeClient(),  # type: ignore[arg-type]
+        session_store=SessionStore(tmp_dir / "sessions.json"),
     )
     return create_app(runtime=runtime)
 
