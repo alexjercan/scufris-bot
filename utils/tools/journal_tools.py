@@ -4,7 +4,7 @@ import logging
 import subprocess
 from typing import Optional
 
-from langchain.tools import tool
+from ._decorator import tool
 
 logger = logging.getLogger("scufris-bot.tools.journal")
 

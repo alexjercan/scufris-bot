@@ -9,7 +9,8 @@ import logging
 from typing import Any, Dict, List
 
 import requests
-from langchain.tools import tool
+
+from ._decorator import tool
 
 logger = logging.getLogger("scufris-bot.tools.weather")
 

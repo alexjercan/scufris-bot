@@ -3,14 +3,15 @@
 
 Covers:
 
-- :class:`LLMCompactor` happy path + every degradation mode (LLM
-  raises, malformed JSON, non-object root, non-string fields).
+- :class:`LLMCompactor` happy path + every degradation mode
+  (transport raises, malformed JSON, non-object root, non-string
+  fields).
 - :func:`create_compactor` factory honouring the
   ``SCUFRIS_COMPACTOR=noop`` opt-out.
 - ``ChatHistoryManager.get_history_with_new_message`` prepending
-  facts + summary SystemMessages in the documented order.
+  facts + summary system messages in the documented order.
 - ``ChatHistoryManager.build_context_messages`` for the sub-agent
-  injection path (used by ``agent_builder.sub_agent_tool``).
+  injection path.
 - Per-fact provenance: ``FactEntry`` populated with source +
   timestamp; compactor-sourced facts marked ``"compactor"``;
   ``add_facts`` defaults to ``"remember"``.
@@ -21,13 +22,6 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List
 
-from langchain_core.messages import (
-    AIMessage,
-    BaseMessage,
-    HumanMessage,
-    SystemMessage,
-)
-
 from utils.history import ChatHistoryManager
 from utils.memory_compactor import (
     CompactionResult,
@@ -37,27 +31,39 @@ from utils.memory_compactor import (
     create_compactor,
     format_age,
 )
+from utils.messages import HistoryMessage, user_message
 
 # ---------------------------------------------------------------------------
 # Test doubles
 # ---------------------------------------------------------------------------
 
 
-class _FakeLLM:
-    """Minimal LLM stub: configurable return value, records prompts."""
+class _FakeTransport:
+    """Minimal chat transport stub: configurable return value, records prompts.
+
+    Mirrors the :class:`OllamaChatTransport` surface
+    (``.chat(messages) -> str``) without any HTTP traffic.
+    """
 
     def __init__(self, response: Any) -> None:
         self._response = response
-        self.prompts: List[str] = []
+        self.calls: List[List[Dict[str, str]]] = []
 
-    def invoke(self, prompt: str) -> Any:
-        self.prompts.append(prompt)
+    def chat(self, messages: List[Dict[str, str]]) -> Any:
+        self.calls.append(list(messages))
         return self._response
 
+    @property
+    def prompts(self) -> List[str]:
+        """Helper for legacy assertion shape: extract user content."""
+        return [
+            m["content"] for call in self.calls for m in call if m["role"] == "user"
+        ]
 
-class _RaisingLLM:
-    def invoke(self, prompt: str) -> Any:
-        raise RuntimeError("llm down")
+
+class _RaisingTransport:
+    def chat(self, messages: List[Dict[str, str]]) -> Any:
+        raise RuntimeError("transport down")
 
 
 # ---------------------------------------------------------------------------
@@ -65,19 +71,19 @@ class _RaisingLLM:
 # ---------------------------------------------------------------------------
 
 
-def test_llm_compactor_parses_valid_json_response_with_content_attr():
+def test_llm_compactor_parses_valid_json_response():
     payload = {"summary": "user lives in Cluj", "facts": {"location": "Cluj"}}
-    llm = _FakeLLM(AIMessage(content=json.dumps(payload)))
-    c = LLMCompactor(llm)
-    result = c.compact([HumanMessage(content="I live in Cluj")], "", {})
+    transport = _FakeTransport(json.dumps(payload))
+    c = LLMCompactor(transport)
+    result = c.compact([user_message("I live in Cluj")], "", {})
     assert result == {"summary": "user lives in Cluj", "facts": {"location": "Cluj"}}
-    assert "I live in Cluj" in llm.prompts[0]
+    assert "I live in Cluj" in transport.prompts[0]
 
 
 def test_llm_compactor_accepts_plain_string_response():
     payload = '{"summary": "s", "facts": {"k": "v"}}'
-    c = LLMCompactor(_FakeLLM(payload))
-    assert c.compact([HumanMessage(content="x")], "", {}) == {
+    c = LLMCompactor(_FakeTransport(payload))
+    assert c.compact([user_message("x")], "", {}) == {
         "summary": "s",
         "facts": {"k": "v"},
     }
@@ -85,38 +91,38 @@ def test_llm_compactor_accepts_plain_string_response():
 
 def test_llm_compactor_strips_markdown_fences():
     fenced = "```json\n" + json.dumps({"summary": "s", "facts": {}}) + "\n```"
-    c = LLMCompactor(_FakeLLM(AIMessage(content=fenced)))
-    assert c.compact([HumanMessage(content="x")], "prev", {})["summary"] == "s"
+    c = LLMCompactor(_FakeTransport(fenced))
+    assert c.compact([user_message("x")], "prev", {})["summary"] == "s"
 
 
 def test_llm_compactor_malformed_json_preserves_existing_summary():
-    c = LLMCompactor(_FakeLLM(AIMessage(content="not json at all {")))
-    out = c.compact([HumanMessage(content="x")], "kept", {})
+    c = LLMCompactor(_FakeTransport("not json at all {"))
+    out = c.compact([user_message("x")], "kept", {})
     assert out == {"summary": "kept", "facts": {}}
 
 
 def test_llm_compactor_non_object_root_preserves_existing_summary():
-    c = LLMCompactor(_FakeLLM(AIMessage(content='["just", "a", "list"]')))
-    assert c.compact([HumanMessage(content="x")], "kept", {}) == {
+    c = LLMCompactor(_FakeTransport('["just", "a", "list"]'))
+    assert c.compact([user_message("x")], "kept", {}) == {
         "summary": "kept",
         "facts": {},
     }
 
 
-def test_llm_compactor_llm_raises_returns_noop_result():
-    c = LLMCompactor(_RaisingLLM())
-    assert c.compact([HumanMessage(content="x")], "kept", {"k": "v"}) == {
+def test_llm_compactor_transport_raises_returns_noop_result():
+    c = LLMCompactor(_RaisingTransport())
+    assert c.compact([user_message("x")], "kept", {"k": "v"}) == {
         "summary": "kept",
         "facts": {},
     }
 
 
-def test_llm_compactor_empty_evicted_short_circuits_without_calling_llm():
-    llm = _FakeLLM(AIMessage(content="should not be used"))
-    c = LLMCompactor(llm)
+def test_llm_compactor_empty_evicted_short_circuits_without_calling_transport():
+    transport = _FakeTransport("should not be used")
+    c = LLMCompactor(transport)
     out = c.compact([], "kept", {})
     assert out == {"summary": "kept", "facts": {}}
-    assert llm.prompts == []
+    assert transport.calls == []
 
 
 def test_llm_compactor_coerces_non_string_fact_values_and_drops_garbage():
@@ -124,16 +130,16 @@ def test_llm_compactor_coerces_non_string_fact_values_and_drops_garbage():
         "summary": "ok",
         "facts": {"age": 30, "active": True, "ratio": 0.5, "bad": [1, 2]},
     }
-    c = LLMCompactor(_FakeLLM(AIMessage(content=json.dumps(payload))))
-    out = c.compact([HumanMessage(content="x")], "", {})
+    c = LLMCompactor(_FakeTransport(json.dumps(payload)))
+    out = c.compact([user_message("x")], "", {})
     # Scalars coerced to str; list value dropped.
     assert out["facts"] == {"age": "30", "active": "True", "ratio": "0.5"}
 
 
 def test_llm_compactor_non_string_summary_field_falls_back_to_existing():
     payload = {"summary": 123, "facts": {"k": "v"}}
-    c = LLMCompactor(_FakeLLM(AIMessage(content=json.dumps(payload))))
-    out = c.compact([HumanMessage(content="x")], "prev", {})
+    c = LLMCompactor(_FakeTransport(json.dumps(payload)))
+    out = c.compact([user_message("x")], "prev", {})
     assert out["summary"] == "prev"
     assert out["facts"] == {"k": "v"}
 
@@ -148,14 +154,16 @@ def test_create_compactor_noop_env_returns_noop(monkeypatch):
     assert isinstance(create_compactor(), NoopCompactor)
 
 
-def test_create_compactor_with_explicit_llm_skips_ollama_import(monkeypatch):
+def test_create_compactor_with_explicit_transport_skips_ollama_construction(
+    monkeypatch,
+):
     monkeypatch.delenv("SCUFRIS_COMPACTOR", raising=False)
-    fake = _FakeLLM(AIMessage(content='{"summary":"","facts":{}}'))
-    c = create_compactor(llm=fake)
+    fake = _FakeTransport('{"summary":"","facts":{}}')
+    c = create_compactor(transport=fake)
     assert isinstance(c, LLMCompactor)
     # Sanity: it's actually wired to our fake.
-    c.compact([HumanMessage(content="x")], "", {})
-    assert len(fake.prompts) == 1
+    c.compact([user_message("x")], "", {})
+    assert len(fake.calls) == 1
 
 
 def test_create_compactor_noop_env_case_insensitive(monkeypatch):
@@ -281,9 +289,9 @@ def test_build_context_messages_returns_system_messages():
     h._summaries[(1, "knowledge_agent")] = "lives in Cluj"
     out = h.build_context_messages(1, "knowledge_agent")
     assert len(out) == 2
-    assert all(isinstance(m, SystemMessage) for m in out)
-    assert "Known facts" in str(out[0].content)
-    assert "Earlier conversation summary" in str(out[1].content)
+    assert all(isinstance(m, HistoryMessage) and m.role == "system" for m in out)
+    assert "Known facts" in out[0].content
+    assert "Earlier conversation summary" in out[1].content
 
 
 def test_build_context_messages_isolated_per_agent_slice():
@@ -292,15 +300,15 @@ def test_build_context_messages_isolated_per_agent_slice():
     h.add_facts(1, "knowledge_agent", {"k": "sub"})
     main = h.build_context_messages(1, "scufris")
     sub = h.build_context_messages(1, "knowledge_agent")
-    assert "main" in str(main[0].content) and "sub" not in str(main[0].content)
-    assert "sub" in str(sub[0].content) and "main" not in str(sub[0].content)
+    assert "main" in main[0].content and "sub" not in main[0].content
+    assert "sub" in sub[0].content and "main" not in sub[0].content
 
 
 def test_facts_render_includes_provenance_and_age():
     h = ChatHistoryManager()
     h.add_facts(1, "scufris", {"location": "Cluj"})
     out = h.build_context_messages(1, "scufris")
-    content = str(out[0].content)
+    content = out[0].content
     # Provenance + age suffix per line.
     assert "(remember, " in content
     assert " ago" in content or "just now" in content
@@ -319,9 +327,3 @@ def test_prompt_shape_identical_to_phase1_when_no_compaction_state():
     # No system messages prepended — pre-Phase-2 shape.
     assert all(m["role"] in ("user", "assistant") for m in msgs)
     assert [m["role"] for m in msgs] == ["user", "assistant", "user"]
-
-
-def test_unused_imports_smoke():
-    # Reference imports kept at module scope for clarity.
-    assert BaseMessage is not None
-    assert isinstance({}, Dict)

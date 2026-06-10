@@ -5,8 +5,6 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
-
 from .callbacks import ThinkingEvent
 from .memory_compactor import (
     Compactor,
@@ -16,6 +14,7 @@ from .memory_compactor import (
     format_age,
     make_fact_entry,
 )
+from .messages import HistoryMessage, assistant_message, system_message, user_message
 
 # Default agent slot — the main user-facing agent.
 # Sub-agents use their own name (e.g. "knowledge_agent").
@@ -72,7 +71,7 @@ class ChatHistoryManager:
         self._event_sink: Optional[Callable[[ThinkingEvent], None]] = event_sink
 
         # Dictionary keyed by (user_id, agent_name).
-        self._histories: Dict[Tuple[int, str], List[BaseMessage]] = defaultdict(list)
+        self._histories: Dict[Tuple[int, str], List[HistoryMessage]] = defaultdict(list)
 
         # Compaction layers (Phase 2: populated by the compactor on
         # eviction and consumed by prompt assembly). Keyed identically
@@ -108,7 +107,7 @@ class ChatHistoryManager:
     ) -> None:
         """Add a user message to the history."""
         key = (user_id, agent)
-        self._histories[key].append(HumanMessage(content=message))
+        self._histories[key].append(user_message(message))
         self._trim_history(key)
         self.logger.debug(f"Added user message for user {user_id} (agent {agent})")
 
@@ -117,13 +116,13 @@ class ChatHistoryManager:
     ) -> None:
         """Add an AI message to the history."""
         key = (user_id, agent)
-        self._histories[key].append(AIMessage(content=message))
+        self._histories[key].append(assistant_message(message))
         self._trim_history(key)
         self.logger.debug(f"Added AI message for user {user_id} (agent {agent})")
 
     def get_history(
         self, user_id: int, agent: str = SCUFRIS_AGENT
-    ) -> List[BaseMessage]:
+    ) -> List[HistoryMessage]:
         """Get the chat history for a (user, agent) slice."""
         return list(self._histories.get((user_id, agent), []))
 
@@ -142,26 +141,24 @@ class ChatHistoryManager:
         history = self.get_history(user_id, agent=agent)
         messages: List[Dict[str, Any]] = []
         for ctx in self._build_context_messages(user_id, agent):
-            messages.append({"role": "system", "content": ctx.content})
+            messages.append({"role": ctx.role, "content": ctx.content})
         for msg in history:
-            messages.append(
-                {
-                    "role": "user" if isinstance(msg, HumanMessage) else "assistant",
-                    "content": msg.content,
-                }
-            )
+            messages.append({"role": msg.role, "content": msg.content})
         messages.append({"role": "user", "content": new_message})
         return messages
 
     def build_context_messages(
         self, user_id: int, agent: str = SCUFRIS_AGENT
-    ) -> List[BaseMessage]:
+    ) -> List[HistoryMessage]:
         """Public wrapper around :meth:`_build_context_messages`.
 
-        Returns a list of :class:`SystemMessage` instances (possibly
-        empty) suitable for prepending to a sub-agent's
-        ``input_messages``. Used by ``agent_builder.sub_agent_tool``
-        so sub-agents see their own slice's facts + summary.
+        Returns a list of system-role :class:`HistoryMessage` instances
+        (possibly empty) suitable for prepending to a sub-agent's
+        ``input_messages``. Historically used by ``agent_builder`` so
+        sub-agents see their own slice's facts + summary; that path
+        is gone after the OpenCode swap, but the helper is kept for
+        symmetry with :meth:`get_history_with_new_message` and for
+        tests.
         """
         return list(self._build_context_messages(user_id, agent))
 
@@ -170,22 +167,21 @@ class ChatHistoryManager:
         return len(self._histories.get((user_id, agent), []))
 
     # ------------------------------------------------------------------
-    # Sub-agent API (raw BaseMessage append + token-budget trim)
+    # Sub-agent API (raw HistoryMessage append + token-budget trim)
     # ------------------------------------------------------------------
 
     def add_messages(
         self,
         user_id: int,
         agent: str,
-        messages: List[BaseMessage],
+        messages: List[HistoryMessage],
         token_budget: int,
     ) -> None:
         """Append raw messages to a sub-agent slice and trim to ``token_budget``.
 
         Used by sub-agents that opt into per-agent memory. Stores the
-        raw ``BaseMessage`` instances (preserving tool-call structure,
-        not just string content). Trim is char-proxy based — see
-        ``_trim_by_tokens``.
+        raw :class:`HistoryMessage` instances. Trim is char-proxy based
+        — see ``_trim_by_tokens``.
 
         Args:
             user_id: User ID
@@ -477,7 +473,9 @@ class ChatHistoryManager:
     # Internal trim helpers
     # ------------------------------------------------------------------
 
-    def _run_compactor(self, key: Tuple[int, str], evicted: List[BaseMessage]) -> None:
+    def _run_compactor(
+        self, key: Tuple[int, str], evicted: List[HistoryMessage]
+    ) -> None:
         """Hand evicted messages to the compactor and merge results.
 
         Errors are caught + logged: the window is the source of
@@ -542,20 +540,20 @@ class ChatHistoryManager:
                 except Exception:  # pragma: no cover — never break eviction
                     self.logger.exception("event_sink raised on compaction event")
 
-    def _build_context_messages(self, user_id: int, agent: str) -> List[BaseMessage]:
+    def _build_context_messages(self, user_id: int, agent: str) -> List[HistoryMessage]:
         """Construct the system messages prepended to a slice's prompt.
 
         Returns ``[]`` when both summary and facts are empty so the
         prompt shape is identical to pre-Phase-2 in cold-start state.
-        Otherwise returns up to two :class:`SystemMessage` instances
-        in the documented order: facts first, then summary.
+        Otherwise returns up to two system-role :class:`HistoryMessage`
+        instances in the documented order: facts first, then summary.
 
         Facts render as ``- key: value (source, age)`` lines so the
         agent (and the human reading the trace) can see *where* a
         fact came from. This addresses the user's request for
         provenance in the logs.
         """
-        out: List[BaseMessage] = []
+        out: List[HistoryMessage] = []
         facts = self._facts.get((user_id, agent), {})
         if facts:
             lines = ["Known facts about the user (slot-keyed, durable):"]
@@ -564,12 +562,10 @@ class ChatHistoryManager:
                     f"- {k}: {entry.value} ({entry.source}, "
                     f"{format_age(entry.timestamp)})"
                 )
-            out.append(SystemMessage(content="\n".join(lines)))
+            out.append(system_message("\n".join(lines)))
         summary = self._summaries.get((user_id, agent), "")
         if summary:
-            out.append(
-                SystemMessage(content=f"Earlier conversation summary: {summary}")
-            )
+            out.append(system_message(f"Earlier conversation summary: {summary}"))
         return out
 
     def _trim_history(self, key: Tuple[int, str]) -> None:

@@ -9,7 +9,8 @@ remaining legacy tools).
 import logging
 
 from ddgs import DDGS
-from langchain.tools import tool
+
+from ._decorator import tool
 
 logger = logging.getLogger("scufris-bot.tools.search")
 

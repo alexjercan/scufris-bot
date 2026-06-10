@@ -3,7 +3,7 @@
 import logging
 from datetime import datetime, timezone
 
-from langchain.tools import tool
+from ._decorator import tool
 
 logger = logging.getLogger("scufris-bot.tools.datetime")
 
