@@ -15,8 +15,6 @@ Covers Phase 1 of the history-compaction rollout
 
 from typing import Dict, List
 
-from langchain_core.messages import BaseMessage, HumanMessage
-
 from utils.history import (
     _FACTS_ENTRY_CAP,
     _SUMMARY_CHAR_CAP,
@@ -26,6 +24,7 @@ from utils.memory_compactor import (
     CompactionResult,
     NoopCompactor,
 )
+from utils.messages import HistoryMessage, user_message
 
 # ---------------------------------------------------------------------------
 # Test doubles
@@ -36,7 +35,7 @@ class RecordingCompactor:
     """Records every compact() call; returns a configurable result."""
 
     def __init__(self, result: CompactionResult | None = None) -> None:
-        self.calls: list[tuple[list[BaseMessage], str, Dict[str, str]]] = []
+        self.calls: list[tuple[list[HistoryMessage], str, Dict[str, str]]] = []
         self._result: CompactionResult = result or {
             "summary": "",
             "facts": {},
@@ -44,7 +43,7 @@ class RecordingCompactor:
 
     def compact(
         self,
-        evicted: List[BaseMessage],
+        evicted: List[HistoryMessage],
         existing_summary: str,
         existing_facts: Dict[str, str],
     ) -> CompactionResult:
@@ -66,7 +65,7 @@ class RaisingCompactor:
 
 def test_noop_preserves_existing_summary_and_returns_empty_facts():
     c = NoopCompactor()
-    result = c.compact([HumanMessage(content="x")], "prior summary", {"k": "v"})
+    result = c.compact([user_message("x")], "prior summary", {"k": "v"})
     assert result == {"summary": "prior summary", "facts": {}}
 
 
@@ -191,7 +190,7 @@ def test_trim_by_tokens_calls_compactor_with_full_batch():
     rec = RecordingCompactor()
     h = ChatHistoryManager(compactor=rec)
     # Each message is ~40 chars → ~10 tokens (char/4 ratio).
-    msgs = [HumanMessage(content="x" * 40) for _ in range(5)]
+    msgs = [user_message("x" * 40) for _ in range(5)]
     # Budget = 15 tokens (~60 chars). Should evict 4 of 5
     # (always keep 1 minimum).
     h.add_messages(1, "knowledge_agent", msgs, token_budget=15)
@@ -204,7 +203,7 @@ def test_trim_by_tokens_calls_compactor_with_full_batch():
 def test_trim_by_tokens_no_eviction_skips_compactor():
     rec = RecordingCompactor()
     h = ChatHistoryManager(compactor=rec)
-    h.add_messages(1, "knowledge_agent", [HumanMessage(content="x")], token_budget=1000)
+    h.add_messages(1, "knowledge_agent", [user_message("x")], token_budget=1000)
     assert rec.calls == []
 
 

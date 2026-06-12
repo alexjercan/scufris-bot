@@ -121,6 +121,7 @@ def _thinking_keyboard(expanded: bool) -> InlineKeyboardMarkup:
         [[InlineKeyboardButton(THINKING_LABEL_SHOW, callback_data="think:show")]]
     )
 
+
 # Single client reused for every turn; opened in main() before polling
 # starts and closed on shutdown.
 _client: Optional[ScufrisClient] = None
@@ -240,7 +241,9 @@ class PlaceholderRenderer:
         if ev.kind == "compaction":
             n_msg = ev.evicted or 0
             n_facts = ev.new_facts or 0
-            return f"🧹 [memory] {ev.source}: compacted {n_msg} msg(s), +{n_facts} fact(s)"
+            return (
+                f"🧹 [memory] {ev.source}: compacted {n_msg} msg(s), +{n_facts} fact(s)"
+            )
         if ev.kind == "text":
             text = ev.text.replace("\n", " ")
             return f"{indent}  💭 {src}: {text}"

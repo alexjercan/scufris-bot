@@ -11,7 +11,7 @@ from typing import AsyncIterator, Optional
 from fastapi import FastAPI
 
 from .bootstrap import Runtime, build_runtime
-from .routes import admin, chat, identity, stats
+from .routes import admin, chat, identity, opencode, stats
 
 logger = logging.getLogger("scufris-server")
 
@@ -21,6 +21,24 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     runtime = build_runtime()
     app.state.runtime = runtime
     app.state.started_at = datetime.now(timezone.utc)
+    # Start the shared OpenCode /event listener so concurrent chat
+    # turns share a single upstream connection (task 105013). On
+    # failure (OpenCode unreachable, transient network) the bus
+    # itself reconnects with backoff — startup must not block on it.
+    try:
+        await runtime.opencode_client.start_event_bus()
+        logger.info("opencode event bus started")
+    except Exception:  # noqa: BLE001 — bus errors recover via reconnect
+        logger.exception("start_event_bus raised; continuing without bus")
+    # Best-effort: drop any persisted user_id -> session_id entries
+    # whose upstream session no longer exists. Failures here are
+    # already logged by the AgentManager and never abort startup.
+    try:
+        pruned = await runtime.agent_manager.prune_invalid_sessions()
+        if pruned:
+            logger.info("startup: pruned %d stale OpenCode session(s)", pruned)
+    except Exception:  # noqa: BLE001 — startup must never fail on pruning
+        logger.exception("prune_invalid_sessions raised; continuing startup")
     logger.info("scufris-server startup complete")
     try:
         yield
@@ -47,6 +65,13 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                         "shutdown: %d task(s) did not finish in time",
                         len(still),
                     )
+        # Close the OpenCode HTTP client (releases the connection pool
+        # and the long-lived /event stream if any chat_stream is still
+        # alive after task cancellation above).
+        try:
+            await runtime.opencode_client.aclose()
+        except Exception:  # noqa: BLE001 — never hide other shutdown errors
+            logger.exception("opencode client aclose() raised")
         logger.info("scufris-server shutdown complete")
 
 
@@ -67,5 +92,6 @@ def create_app(runtime: Optional[Runtime] = None) -> FastAPI:
     app.include_router(admin.router)
     app.include_router(chat.router)
     app.include_router(identity.router)
+    app.include_router(opencode.router)
     app.include_router(stats.router)
     return app

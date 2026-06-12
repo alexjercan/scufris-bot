@@ -4,9 +4,13 @@ Covers Phase 3.1 (per-agent slicing), Phase 3.3 (token-budget trim),
 the defaultdict phantom-entry regression, and stats aggregation.
 """
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-
 from utils.history import SCUFRIS_AGENT, ChatHistoryManager, create_history_manager
+from utils.messages import (
+    HistoryMessage,
+    assistant_message,
+    system_message,
+    user_message,
+)
 
 # ---------------------------------------------------------------------------
 # Backward compatibility: agent defaults to "scufris"
@@ -24,7 +28,7 @@ def test_add_user_and_ai_messages_round_trip_in_order():
     h.add_user_message(1, "hi")
     h.add_ai_message(1, "hello")
     msgs = h.get_history(1)
-    assert [type(m) for m in msgs] == [HumanMessage, AIMessage]
+    assert [m.role for m in msgs] == ["user", "assistant"]
     assert [m.content for m in msgs] == ["hi", "hello"]
 
 
@@ -43,7 +47,7 @@ def test_get_history_with_new_message_appends_user_turn_dict_format():
 def test_message_count_default_agent_only():
     h = ChatHistoryManager()
     h.add_user_message(1, "hi")
-    h.add_messages(1, "knowledge_agent", [HumanMessage(content="x")], token_budget=100)
+    h.add_messages(1, "knowledge_agent", [user_message("x")], token_budget=100)
     assert h.get_message_count(1) == 1
     assert h.get_message_count(1, "knowledge_agent") == 1
 
@@ -56,7 +60,7 @@ def test_message_count_default_agent_only():
 def test_slices_are_isolated_across_agents_for_same_user():
     h = ChatHistoryManager()
     h.add_user_message(1, "main")
-    h.add_messages(1, "knowledge_agent", [HumanMessage(content="k")], token_budget=100)
+    h.add_messages(1, "knowledge_agent", [user_message("k")], token_budget=100)
     assert [m.content for m in h.get_history(1)] == ["main"]
     assert [m.content for m in h.get_history(1, "knowledge_agent")] == ["k"]
 
@@ -72,7 +76,7 @@ def test_slices_are_isolated_across_users_for_same_agent():
 def test_clear_user_wipes_all_per_agent_slices_for_that_user():
     h = ChatHistoryManager()
     h.add_user_message(1, "main")
-    h.add_messages(1, "knowledge_agent", [HumanMessage(content="k")], token_budget=100)
+    h.add_messages(1, "knowledge_agent", [user_message("k")], token_budget=100)
     h.add_user_message(2, "other")
     removed = h.clear_user(1)
     assert removed == 2
@@ -136,7 +140,7 @@ def test_add_messages_no_op_for_empty_list():
 
 def test_token_trim_evicts_oldest_first_fifo():
     h = ChatHistoryManager()
-    msgs = [HumanMessage(content="a" * 40), HumanMessage(content="b" * 40)]
+    msgs = [user_message("a" * 40), user_message("b" * 40)]
     # budget = 15 tokens => 60 chars. Both 40-char msgs would be 80 chars.
     h.add_messages(1, "ka", msgs, token_budget=15)
     kept = h.get_history(1, "ka")
@@ -145,7 +149,7 @@ def test_token_trim_evicts_oldest_first_fifo():
 
 def test_token_trim_preserves_message_boundaries():
     h = ChatHistoryManager()
-    long = HumanMessage(content="x" * 1000)
+    long = user_message("x" * 1000)
     h.add_messages(1, "ka", [long], token_budget=10)
     kept = h.get_history(1, "ka")
     # Never-empty invariant: even when single msg exceeds budget,
@@ -159,26 +163,27 @@ def test_token_trim_never_empties_slice():
     h.add_messages(
         1,
         "ka",
-        [HumanMessage(content="a" * 100), HumanMessage(content="b" * 100)],
+        [user_message("a" * 100), user_message("b" * 100)],
         token_budget=0,
     )
     assert len(h.get_history(1, "ka")) == 1
 
 
-def test_token_trim_preserves_basemessage_subtypes():
+def test_token_trim_preserves_role_metadata():
     h = ChatHistoryManager()
     h.add_messages(
         1,
         "ka",
         [
-            SystemMessage(content="sys"),
-            HumanMessage(content="u"),
-            AIMessage(content="a"),
+            system_message("sys"),
+            user_message("u"),
+            assistant_message("a"),
         ],
         token_budget=1000,
     )
     kept = h.get_history(1, "ka")
-    assert [type(m) for m in kept] == [SystemMessage, HumanMessage, AIMessage]
+    assert all(isinstance(m, HistoryMessage) for m in kept)
+    assert [m.role for m in kept] == ["system", "user", "assistant"]
 
 
 # ---------------------------------------------------------------------------
@@ -209,7 +214,7 @@ def test_get_stats_aggregates_across_users_and_agents():
     h = ChatHistoryManager(max_history_per_user=20)
     h.add_user_message(1, "u1-main")
     h.add_user_message(2, "u2-main")
-    h.add_messages(1, "knowledge_agent", [HumanMessage(content="k")], token_budget=100)
+    h.add_messages(1, "knowledge_agent", [user_message("k")], token_budget=100)
     h.record_invocation(1, "knowledge_agent")
     stats = h.get_stats()
     assert stats["total_users"] == 2

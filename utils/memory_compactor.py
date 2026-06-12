@@ -19,7 +19,9 @@ the history manager wraps incoming facts with ``source="compactor"``
 on merge.
 
 See ``tasks/20260509-162614/TASK.md`` (the spike) for the full
-design.
+design. The LangChain stack was removed in
+``tasks/20260610-105002``; the compactor now talks to Ollama via
+``httpx`` against ``POST /api/chat`` directly.
 """
 
 from __future__ import annotations
@@ -31,7 +33,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Optional, Protocol, TypedDict
 
-from langchain_core.messages import BaseMessage
+from .messages import HistoryMessage
 
 _logger = logging.getLogger("scufris-bot.memory_compactor")
 
@@ -77,7 +79,7 @@ class Compactor(Protocol):
 
     def compact(
         self,
-        evicted: List[BaseMessage],
+        evicted: List[HistoryMessage],
         existing_summary: str,
         existing_facts: Dict[str, str],
     ) -> CompactionResult:
@@ -109,7 +111,7 @@ class NoopCompactor:
 
     def compact(
         self,
-        evicted: List[BaseMessage],
+        evicted: List[HistoryMessage],
         existing_summary: str,
         existing_facts: Dict[str, str],
     ) -> CompactionResult:
@@ -154,15 +156,14 @@ JSON output:
 """
 
 
-def _format_evicted(evicted: List[BaseMessage]) -> str:
+def _format_evicted(evicted: List[HistoryMessage]) -> str:
     """Render evicted messages as a compact role/content transcript."""
     lines: List[str] = []
     for msg in evicted:
-        role = getattr(msg, "type", msg.__class__.__name__)
-        content = str(getattr(msg, "content", "")).strip()
+        content = msg.content.strip()
         if not content:
             continue
-        lines.append(f"{role}: {content}")
+        lines.append(f"{msg.role}: {content}")
     return "\n".join(lines) if lines else "(no textual content)"
 
 
@@ -208,24 +209,91 @@ def _parse_compaction_json(raw: str, existing_summary: str) -> CompactionResult:
     return {"summary": summary, "facts": clean_facts}
 
 
-class LLMCompactor:
-    """Ollama-backed compactor using a small conservative prompt.
+# ---------------------------------------------------------------------------
+# Transports
+# ---------------------------------------------------------------------------
 
-    The ``llm`` argument must expose ``invoke(prompt: str) -> Any``
-    (LangChain ``BaseChatModel`` / ``BaseLLM`` shape). Output text
-    is read from ``.content`` if present, else ``str(response)``.
 
-    Never raises: any LLM error or malformed output degrades to a
-    no-op result that preserves the existing summary, with a WARNING
-    log line for visibility.
+class OllamaChatTransport:
+    """Sync HTTP transport for Ollama's ``POST /api/chat`` endpoint.
+
+    Replaces ``langchain_ollama.ChatOllama`` for the compactor's
+    purposes. Exposes a single :meth:`chat` method that takes a
+    ``messages: list[{role, content}]`` list and returns the
+    assistant's textual response.
+
+    The compactor only needs a single-shot non-streaming completion
+    so we set ``stream=False`` and read the full body in one go.
+    Errors propagate as ``httpx``-native exceptions and are caught
+    by :class:`LLMCompactor` (the compactor is total — it must
+    never raise).
+
+    HTTP timeouts match LangChain's defaults (60s connect/read);
+    the compactor is off the hot path, so this is generous.
     """
 
-    def __init__(self, llm: Any) -> None:
-        self._llm = llm
+    DEFAULT_TIMEOUT_SECONDS = 60.0
+
+    def __init__(
+        self,
+        model: str,
+        *,
+        base_url: str = "http://localhost:11434",
+        temperature: float = 0.0,
+        timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    ) -> None:
+        self.model = model
+        self.base_url = base_url.rstrip("/")
+        self.temperature = temperature
+        self.timeout = timeout
+
+    def chat(self, messages: List[Dict[str, str]]) -> str:
+        """POST ``messages`` to ``/api/chat`` and return assistant text.
+
+        ``messages`` must follow the Ollama / OpenAI wire shape
+        (``[{"role": "...", "content": "..."}, ...]``).
+        """
+        # Lazy import so the module can be imported in tests / env
+        # where httpx isn't strictly required (NoopCompactor path).
+        import httpx
+
+        payload = {
+            "model": self.model,
+            "messages": list(messages),
+            "stream": False,
+            "options": {"temperature": self.temperature},
+        }
+        with httpx.Client(timeout=self.timeout) as http:
+            response = http.post(f"{self.base_url}/api/chat", json=payload)
+        response.raise_for_status()
+        data = response.json()
+        # Ollama /api/chat (non-streaming) shape:
+        #   {"message": {"role": "assistant", "content": "..."}, ...}
+        msg = data.get("message") or {}
+        content = msg.get("content")
+        return content if isinstance(content, str) else ""
+
+
+class LLMCompactor:
+    """HTTP-backed compactor using a small conservative prompt.
+
+    The ``transport`` argument exposes
+    ``chat(messages: list[{role, content}]) -> str`` so any source
+    of completions (Ollama, a stub for tests, a future OpenCode
+    summarize wrapper) plugs in cleanly. :class:`OllamaChatTransport`
+    is the production default.
+
+    Never raises: any transport error or malformed output degrades to
+    a no-op result that preserves the existing summary, with a
+    WARNING log line for visibility.
+    """
+
+    def __init__(self, transport: Any) -> None:
+        self._transport = transport
 
     def compact(
         self,
-        evicted: List[BaseMessage],
+        evicted: List[HistoryMessage],
         existing_summary: str,
         existing_facts: Dict[str, str],
     ) -> CompactionResult:
@@ -237,14 +305,13 @@ class LLMCompactor:
             evicted_text=_format_evicted(evicted),
         )
         try:
-            response = self._llm.invoke(prompt)
+            raw = self._transport.chat([{"role": "user", "content": prompt}])
         except Exception:
             _logger.warning(
-                "LLMCompactor: LLM invocation raised; preserving existing summary",
+                "LLMCompactor: transport raised; preserving existing summary",
                 exc_info=True,
             )
             return {"summary": existing_summary, "facts": {}}
-        raw = response.content if hasattr(response, "content") else str(response)
         if not isinstance(raw, str):
             raw = str(raw)
         return _parse_compaction_json(raw, existing_summary)
@@ -258,34 +325,44 @@ class LLMCompactor:
 def create_compactor(
     model: Optional[str] = None,
     *,
-    llm: Optional[Any] = None,
+    transport: Optional[Any] = None,
+    base_url: Optional[str] = None,
 ) -> Compactor:
     """Create the default compactor, honouring ``SCUFRIS_COMPACTOR``.
 
     - ``SCUFRIS_COMPACTOR=noop`` → :class:`NoopCompactor` (A/B opt-out
       to fall back to Phase 1 behaviour without code changes).
-    - Anything else (including unset) → :class:`LLMCompactor`.
+    - Anything else (including unset) → :class:`LLMCompactor` wrapping
+      an :class:`OllamaChatTransport`.
 
     Args:
         model: Ollama model name. Defaults to ``$SCUFRIS_COMPACTOR_MODEL``
-            or ``"qwen2.5:3b"``. Only used when ``llm`` is not provided.
-        llm: Pre-built LLM instance (escape hatch for tests / when the
-            caller wants to share a model across components). When
-            given, ``model`` is ignored.
+            or ``"qwen2.5:3b"``. Only used when ``transport`` is not
+            provided.
+        transport: Pre-built transport instance (escape hatch for
+            tests / when the caller wants to share an HTTP client
+            across components). When given, ``model`` and ``base_url``
+            are ignored.
+        base_url: Ollama base URL. Defaults to ``$OLLAMA_BASE_URL`` or
+            ``"http://localhost:11434"``. Only used when ``transport``
+            is not provided.
     """
     mode = os.environ.get("SCUFRIS_COMPACTOR", "").strip().lower()
     if mode == "noop":
         _logger.info("create_compactor: SCUFRIS_COMPACTOR=noop → NoopCompactor")
         return NoopCompactor()
-    if llm is not None:
-        return LLMCompactor(llm)
-    # Lazy import: keep test-only / noop paths free of the ollama
-    # dependency, and avoid pulling it in at module import time.
-    from langchain_ollama import ChatOllama  # type: ignore[import-untyped]
-
-    chosen = model or os.environ.get("SCUFRIS_COMPACTOR_MODEL") or "qwen2.5:3b"
-    _logger.info("create_compactor: LLMCompactor(model=%s)", chosen)
-    return LLMCompactor(ChatOllama(model=chosen, temperature=0))
+    if transport is not None:
+        return LLMCompactor(transport)
+    chosen_model = model or os.environ.get("SCUFRIS_COMPACTOR_MODEL") or "qwen2.5:3b"
+    chosen_url = (
+        base_url or os.environ.get("OLLAMA_BASE_URL") or "http://localhost:11434"
+    )
+    _logger.info(
+        "create_compactor: LLMCompactor(model=%s, base_url=%s)",
+        chosen_model,
+        chosen_url,
+    )
+    return LLMCompactor(OllamaChatTransport(chosen_model, base_url=chosen_url))
 
 
 # Helper for the history manager to construct FactEntry values with

@@ -1,7 +1,7 @@
 """Tests for HTTP-touching tools (mocked at the SDK/transport boundary).
 
-Covers `weather_tool`, `web_search_tool`, and `opencode_tool`. All
-network access is monkeypatched — tests must not perform real I/O.
+Covers `weather_tool` and `web_search_tool`. All network access is
+monkeypatched — tests must not perform real I/O.
 """
 
 from __future__ import annotations
@@ -12,7 +12,6 @@ from typing import Any, Dict, List
 import pytest
 import requests
 
-from utils.tools.opencode_tool import opencode_tool
 from utils.tools.weather_tool import weather_tool
 from utils.tools.web_search import web_search_tool
 
@@ -23,7 +22,6 @@ from utils.tools.web_search import web_search_tool
 # tool, not the module. Reach into sys.modules to get the real modules.
 weather_mod = sys.modules["utils.tools.weather_tool"]
 search_mod = sys.modules["utils.tools.web_search"]
-opencode_mod = sys.modules["utils.tools.opencode_tool"]
 
 
 # ---------------------------------------------------------------------------
@@ -214,101 +212,3 @@ def test_web_search_returns_failure_message_on_exception(fake_ddgs):
     out = web_search_tool.invoke({"query": "anything"})
     assert out.startswith("Search failed:")
     assert "upstream down" in out
-
-
-# ---------------------------------------------------------------------------
-# opencode_tool
-# ---------------------------------------------------------------------------
-
-
-class _FakeSessionAPI:
-    def __init__(self, response, raise_on_create=None):
-        self._response = response
-        self._raise_on_create = raise_on_create
-        self.created = False
-        self.deleted_id = None
-        self.chat_kwargs = None
-
-    def create(self, extra_body=None):
-        if self._raise_on_create:
-            raise self._raise_on_create
-        self.created = True
-        return type("S", (), {"id": "sess-1"})()
-
-    def chat(self, **kwargs):
-        self.chat_kwargs = kwargs
-        return self._response
-
-    def delete(self, sid):
-        self.deleted_id = sid
-
-
-class _FakeOpencodeClient:
-    def __init__(self, *, response, raise_on_create=None):
-        self.session = _FakeSessionAPI(response, raise_on_create=raise_on_create)
-
-
-def _install_fake_opencode(
-    monkeypatch, *, response=None, raise_on_create=None
-) -> Dict[str, Any]:
-    holder: Dict[str, Any] = {}
-
-    def factory(base_url=None):
-        client = _FakeOpencodeClient(response=response, raise_on_create=raise_on_create)
-        holder["client"] = client
-        holder["base_url"] = base_url
-        return client
-
-    monkeypatch.setattr(opencode_mod, "Opencode", factory)
-    return holder
-
-
-def test_opencode_happy_path_concatenates_text_parts(monkeypatch):
-    response = type(
-        "R",
-        (),
-        {
-            "parts": [
-                type("P", (), {"text": "Hello "})(),
-                type("P", (), {"text": "world"})(),
-            ]
-        },
-    )()
-    holder = _install_fake_opencode(monkeypatch, response=response)
-    out = opencode_tool.invoke({"task": "do thing"})
-    assert out == "Hello world"
-    assert holder["client"].session.deleted_id == "sess-1"
-    assert holder["client"].session.chat_kwargs["id"] == "sess-1"
-
-
-def test_opencode_returns_no_output_message_when_response_empty(monkeypatch):
-    response = type("R", (), {"parts": []})()
-    _install_fake_opencode(monkeypatch, response=response)
-    out = opencode_tool.invoke({"task": "do thing"})
-    assert out == "OpenCode completed but returned no output."
-
-
-def test_opencode_reports_connection_error_with_serve_hint(monkeypatch):
-    from opencode_ai import APIConnectionError
-
-    _install_fake_opencode(
-        monkeypatch,
-        raise_on_create=APIConnectionError(request=None),  # type: ignore[arg-type]
-    )
-    out = opencode_tool.invoke({"task": "do thing"})
-    assert "Cannot connect to OpenCode server" in out
-    assert "opencode serve" in out
-
-
-def test_opencode_reports_authentication_error_with_provider_hint(monkeypatch):
-    _install_fake_opencode(monkeypatch, raise_on_create=RuntimeError("API key missing"))
-    out = opencode_tool.invoke({"task": "do thing"})
-    assert "Authentication error" in out
-    assert "opencode providers" in out
-
-
-def test_opencode_reports_generic_error_with_catchall_hint(monkeypatch):
-    _install_fake_opencode(monkeypatch, raise_on_create=RuntimeError("boom"))
-    out = opencode_tool.invoke({"task": "do thing"})
-    assert "Error running OpenCode task" in out
-    assert "properly configured" in out

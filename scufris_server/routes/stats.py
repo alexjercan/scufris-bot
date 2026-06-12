@@ -80,4 +80,9 @@ async def clear(request: Request, body: ClearRequest) -> ClearResponse:
     runtime = request.app.state.runtime
     breakdown = runtime.history_manager.get_user_breakdown(body.user_id)
     cleared = runtime.history_manager.clear_user(body.user_id)
+    # Forget the OpenCode session for this user so the next turn starts
+    # fresh. ``AgentManager.delete_session`` is best-effort: it drops the
+    # in-memory mapping unconditionally and logs (without raising) on
+    # daemon errors, so a flaky OpenCode shouldn't fail /v1/clear.
+    await runtime.agent_manager.delete_session(body.user_id)
     return ClearResponse(user_id=body.user_id, cleared=cleared, breakdown=breakdown)

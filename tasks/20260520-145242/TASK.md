@@ -1,7 +1,7 @@
 # RAG document store: embeddings, sync, and Q&A
 
 - STATUS: OPEN
-- PRIORITY: 70
+- PRIORITY: 0
 - TAGS: rag,knowledge,tools,backlog
 
 A local vector database — **sqlite-vec** (decided: keeps the stack flat, matches the SQLite-everywhere story of the persistence task) — that the knowledge agent queries before touching the web.

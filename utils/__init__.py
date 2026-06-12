@@ -1,11 +1,13 @@
 """Utility modules for the Scufris Bot."""
 
-from .agent import AgentManager, create_agent_manager
-from .agent_builder import setup_scufris
-from .callbacks import (
+from .agent import (
+    DEFAULT_SYSTEM_PROMPT_BASE,
+    AgentManager,
     ThinkingCallback,
+    create_agent_manager,
+)
+from .callbacks import (
     ThinkingEvent,
-    ToolCallbackHandler,
     display_name,
     is_sub_agent,
 )
@@ -35,15 +37,32 @@ from .memory_compactor import (
     NoopCompactor,
     create_compactor,
 )
+from .opencode_client import (
+    OpenCodeClient,
+    OpenCodeError,
+    OpenCodeSessionError,
+    OpenCodeStaleSessionError,
+)
+from .opencode_events import (
+    EventMapperState,
+    extract_text_delta,
+    map_opencode_event,
+)
+from .session_store import (
+    DEFAULT_FILENAME as SESSION_STORE_FILENAME,
+)
+from .session_store import (
+    SessionStore,
+    default_session_store_path,
+)
 from .telegram import TelegramTransport, restricted
 
 __all__ = [
     "AgentManager",
-    "create_agent_manager",
-    "setup_scufris",
+    "DEFAULT_SYSTEM_PROMPT_BASE",
     "ThinkingCallback",
+    "create_agent_manager",
     "ThinkingEvent",
-    "ToolCallbackHandler",
     "display_name",
     "is_sub_agent",
     "ClientSection",
@@ -69,6 +88,16 @@ __all__ = [
     "LLMCompactor",
     "NoopCompactor",
     "create_compactor",
+    "OpenCodeClient",
+    "OpenCodeError",
+    "OpenCodeSessionError",
+    "OpenCodeStaleSessionError",
+    "EventMapperState",
+    "extract_text_delta",
+    "map_opencode_event",
+    "SessionStore",
+    "SESSION_STORE_FILENAME",
+    "default_session_store_path",
     "setup_logging",
     "get_logger",
     "truncate_log",
