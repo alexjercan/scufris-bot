@@ -196,8 +196,9 @@ Format: `title, priority, tags` — one-line note follows each.
 
 ## Filed tasks
 
-The 29 spun-off tasks (27 from the backlog above + 2 v1-scope gap items
-added during review — see Notes), in filing order:
+The 32 spun-off tasks (27 from the backlog above + 2 v1-scope gap items
+added during review + 1 spike-driven follow-up + 2 design-doc
+follow-ups — see Notes), in filing order:
 
 | # | Task ID            | P  | Title                                                                          |
 |---|--------------------|----|--------------------------------------------------------------------------------|
@@ -230,6 +231,9 @@ added during review — see Notes), in filing order:
 | 27| `20260613-091102`  | 15 | Decommission/retire old LangChain-based scufris-bot                            |
 | 28| `20260613-091103`  | 50 | Server observability: request IDs, structured JSON logs, /metrics endpoint    *(gap-fill)* |
 | 29| `20260613-091104`  | 35 | Spike: scufris-server-v2 performance baseline (latency, memory, throughput)   *(gap-fill)* |
+| 30| `20260613-093108`  | 73 | Permissions UX bridge: opencode permission.asked → Telegram inline buttons    *(spike #1 follow-up)* |
+| 31| `20260613-093911`  | 70 | Plugin scaffolding: .opencode/plugin/scufris.ts loader, build, test path      *(design #2 follow-up)* |
+| 32| `20260613-093857`  | 60 | Plugin ↔ scufris-server protocol: facts HTTP contract + auth token model      *(design #2 follow-up)* |
 
 ## Sequencing
 
@@ -292,6 +296,27 @@ priority where they conflict.
   `20260513-121621`). They were filed as gap-fill items #28 and #29
   with priorities (50, 35) chosen to match their v1-equivalent role
   (operational, not blocking the core).
+- A further follow-up surfaced during the opencode runtime spike
+  (#1, `20260613-091035`): a permissions UX bridge to relay opencode's
+  `permission.asked` events into Telegram inline-keyboard prompts and
+  post replies back to `POST /session/:id/permissions/:permID`. Filed
+  as #30 (`20260613-093108`) at priority 73 — slightly below the
+  Telegram bot v2 client (#16) which it depends on, and a hard
+  prerequisite before any destructive tool (`bash`, `edit`, `write`,
+  `apply_patch`, custom shell-spawning tools) is enabled in
+  production.
+- Two further follow-ups surfaced while writing the v2 architecture
+  design doc (#2, `20260613-091036`):
+  - #31 (`20260613-093911`, priority 70) — plugin scaffolding & build
+    path. Decides where `.opencode/plugin/scufris.ts` lives, how
+    opencode loads it, whether it needs a bundler step, and how it's
+    tested. Logically precedes #19 (facts store) since the facts
+    tools live in this plugin.
+  - #32 (`20260613-093857`, priority 60) — plugin ↔ scufris-server
+    HTTP protocol for facts and compaction-time context injection,
+    plus the `SCUFRIS_PLUGIN_TOKEN` auth model. Depends on #19 and
+    #31; gated `/v1/internal/*` endpoints separate from the
+    user-facing `/v1/*` surface.
 - Other v1 sub-agent items (knowledge-agent improvements, coding-agent
   sandbox, sub-agent catalog spike) are deliberately **not** carried
   over: they're explicitly the kind of "custom agent loop / per-sub-
