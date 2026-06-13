@@ -136,7 +136,8 @@ Each item is small enough to land in one commit and be reviewed independently.
          equivalent for httpx mocking). Use `uv` to manage.
    - [x] `scufris_server/__init__.py` exposes `__version__`.
    - [x] `scufris_server/__main__.py` runs uvicorn against
-         `scufris_server.app:create_app`.
+         `scufris_server.app:create_app`, reading `bind`/`port` from
+         `Settings` (i.e. honoring `SCUFRIS_BIND` / `SCUFRIS_PORT`).
 
 2. **Config (`config.py`).**
    - [x] Read env vars: `SCUFRIS_BIND` (default `127.0.0.1`),
@@ -191,24 +192,24 @@ Each item is small enough to land in one commit and be reviewed independently.
    - [x] Test boot/teardown cycle.
 
 6. **Logging (`logging.py`).**
-   - [ ] Request-ID middleware: generate a ULID per incoming request,
+   - [x] Request-ID middleware: generate a ULID per incoming request,
          attach to `request.state.request_id` and to a contextvar so
          downstream code can log it.
-   - [ ] Stdout logger that emits JSON lines with: ts, level, request_id,
+   - [x] Stdout logger that emits JSON lines with: ts, level, request_id,
          msg, plus arbitrary kwargs. Keep dependency-free (no
          structlog yet — that lives in #28).
-   - [ ] Tests: middleware sets the contextvar; log line contains
+   - [x] Tests: middleware sets the contextvar; log line contains
          the request ID.
 
 7. **Routes — `health.py`.**
-   - [ ] `GET /v1/healthz` calls `OpencodeClient.health()`. Returns
+   - [x] `GET /v1/healthz` calls `OpencodeClient.health()`. Returns
          `{ok: bool, opencode: {healthy, version} | {error: str}}`.
          200 even when opencode is down — this endpoint is for
          scufris's own liveness; opencode status is reported as data.
-   - [ ] `GET /v1/version` returns `{version: __version__,
+   - [x] `GET /v1/version` returns `{version: __version__,
          opencode_version}`. opencode_version pulled lazily; cached
          after first successful probe.
-   - [ ] Tests: opencode up, down, version cached.
+   - [x] Tests: opencode up, down, version cached.
 
 8. **Routes — `chat.py` (sync only).**
    - [ ] Request model: `ChatRequest{message: str, channel: {surface,

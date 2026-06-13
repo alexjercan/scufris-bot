@@ -2,15 +2,10 @@
 
 Purpose
 -------
-Launch ``uvicorn`` against the scufris-server app factory with a
-temp ``SCUFRIS_STATE_DIR``, wait up to ~10s for it to start, then
-fetch ``/openapi.json`` and inspect the response shape. Tears the
-subprocess down cleanly on every exit path.
-
-We invoke ``python -m uvicorn`` directly (not ``python -m
-scufris_server``) so we can pin host and port — the package entry
-point currently hardcodes ``127.0.0.1:7080``, which would collide
-with a running dev server.
+Launch ``python -m scufris_server`` with a temp ``SCUFRIS_STATE_DIR``
+and an auto-picked ``SCUFRIS_PORT``, wait up to ~10s for it to come
+up, then fetch ``/openapi.json`` and inspect the response shape.
+Tears the subprocess down cleanly on every exit path.
 
 How to run
 ----------
@@ -36,7 +31,7 @@ and lifespan come up cleanly.
 Requires
 --------
 - A free TCP port on 127.0.0.1 (picked automatically).
-- ``uvicorn`` importable (always installed alongside scufris-server).
+- ``scufris_server`` importable in the current environment.
 """
 
 from __future__ import annotations
@@ -89,23 +84,17 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory(prefix="scufris-check-boot-") as td:
         state_dir = Path(td)
-        env = {**os.environ, "SCUFRIS_STATE_DIR": str(state_dir)}
+        env = {
+            **os.environ,
+            "SCUFRIS_STATE_DIR": str(state_dir),
+            "SCUFRIS_BIND": host,
+            "SCUFRIS_PORT": str(port),
+        }
 
-        cmd = [
-            sys.executable,
-            "-m",
-            "uvicorn",
-            "scufris_server.app:create_app",
-            "--factory",
-            "--host",
-            host,
-            "--port",
-            str(port),
-            "--log-level",
-            "warning",
-        ]
+        cmd = [sys.executable, "-m", "scufris_server"]
         print(f"spawning:  {' '.join(cmd)}")
         print(f"state_dir: {state_dir}")
+        print(f"bind:      {host}:{port}")
         print(f"url:       {openapi_url}")
         print()
 

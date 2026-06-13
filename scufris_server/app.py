@@ -24,6 +24,9 @@ State attached to ``app.state``
 - ``opencode``: the live :class:`OpencodeClient`.
 - ``opencode_initial_health``: :class:`HealthResponse` if the startup
   probe succeeded, else ``None`` (degraded boot marker).
+- ``opencode_version``: cached opencode version string, populated by
+  the startup probe and refreshed by ``/v1/healthz`` /
+  ``/v1/version``. ``None`` until the first successful probe.
 """
 
 from __future__ import annotations
@@ -33,10 +36,11 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 
 from scufris_server import __version__
 from scufris_server.config import Settings, get_settings
+from scufris_server.logging import RequestIdMiddleware
 from scufris_server.opencode_client import (
     HealthResponse,
     OpencodeClient,
@@ -78,6 +82,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             client.health(), timeout=HEALTH_PROBE_TIMEOUT_S
         )
         app.state.opencode_initial_health = health
+        app.state.opencode_version = health.version
         logger.info(
             "opencode reachable: version=%s url=%s",
             health.version,
@@ -85,6 +90,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
     except (OpencodeUnavailable, TimeoutError) as exc:
         app.state.opencode_initial_health = None
+        app.state.opencode_version = None
         logger.warning(
             "opencode unreachable at %s (degraded boot): %s",
             settings.opencode_url,
@@ -118,22 +124,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.settings = settings or get_settings()
 
+    app.add_middleware(RequestIdMiddleware)
+
     for router in ROUTERS:
         app.include_router(router)
 
     return app
-
-
-def get_opencode_client(request: Request) -> OpencodeClient:
-    """FastAPI dependency: return the lifespan-scoped opencode client.
-
-    Usage::
-
-        from fastapi import Depends
-        from scufris_server.app import get_opencode_client
-
-        @router.get("/foo")
-        async def foo(oc: OpencodeClient = Depends(get_opencode_client)):
-            ...
-    """
-    return request.app.state.opencode

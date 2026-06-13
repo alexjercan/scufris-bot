@@ -16,7 +16,8 @@ failure, and cleans up after itself. Run from the repo root.
 | `check_schema.py`          | Apply migrations to a temp DB; list tables; verify idempotency.  |       no        |
 | `check_settings.py`        | Print effective `Settings` and the env vars that fed them.       |       no        |
 | `check_opencode_health.py` | Hit `GET /global/health` via `OpencodeClient`.                   |     **yes**     |
-| `check_boot.py`            | Spawn `uvicorn` on a temp `SCUFRIS_STATE_DIR`; fetch OpenAPI.    |    optional     |
+| `check_boot.py`            | Spawn `python -m scufris_server`; fetch `/openapi.json`.         |    optional     |
+| `check_request.py`         | Boot the server; call `/v1/healthz` + `/v1/version`; show ids.   |    optional     |
 
 ## Quick start
 
@@ -27,12 +28,13 @@ python examples/check_schema.py
 python examples/check_settings.py
 python examples/check_opencode_health.py    # requires `opencode serve` running
 python examples/check_boot.py
+python examples/check_request.py
 ```
 
-`check_boot.py` boots the server on an auto-picked free port (the
-`__main__` entry hardcodes 7080, which would collide with a dev
-server). It does not require opencode — without it, the lifespan
-logs a degraded-boot WARNING and the script still passes.
+`check_boot.py` boots the server on an auto-picked free port (passed
+in via `SCUFRIS_PORT`) so it never collides with a running dev
+server. It does not require opencode — without it, the lifespan logs
+a degraded-boot WARNING and the script still passes.
 
 ## Adding a new script
 

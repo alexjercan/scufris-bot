@@ -148,20 +148,18 @@ def test_create_app_uses_default_settings_when_none_provided(
 
 
 def test_create_app_mounts_routers_from_routes_package(tmp_path: Path) -> None:
-    """Mount loop runs over ``ROUTERS``; empty in step 5 but the path
-    must exist so step 7+ can append without touching the factory."""
-    from scufris_server import routes
-
+    """The factory walks ``ROUTERS`` and includes each. Spot-check by
+    asserting a known path from step 7's health router is mounted."""
     settings = _make_settings(tmp_path)
     app = create_app(settings)
 
-    # Built-in OpenAPI endpoints only — no user routes yet.
     routes_paths = {r.path for r in app.routes}  # type: ignore[attr-defined]
+    # Built-in OpenAPI endpoints.
     assert "/openapi.json" in routes_paths
     assert "/docs" in routes_paths
-
-    # ROUTERS list is the wiring surface.
-    assert routes.ROUTERS == []
+    # From scufris_server.routes.health (step 7).
+    assert "/v1/healthz" in routes_paths
+    assert "/v1/version" in routes_paths
 
 
 def test_openapi_metadata_matches_package(tmp_path: Path) -> None:
