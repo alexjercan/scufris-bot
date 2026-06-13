@@ -1,6 +1,6 @@
 # Morning briefing and scheduled agent prompts via timetable
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 0
 - TAGS: journal,automation,ux,backlog
 

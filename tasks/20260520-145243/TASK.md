@@ -1,6 +1,6 @@
 # Proactive follow-up suggestions in agent prompts
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 60
 - TAGS: ux,prompts,backlog
 

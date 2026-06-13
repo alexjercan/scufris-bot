@@ -1,6 +1,6 @@
 # RAG document store: embeddings, sync, and Q&A
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 70
 - TAGS: rag,knowledge,tools,backlog
 

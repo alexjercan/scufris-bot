@@ -1,6 +1,6 @@
 # Persistent conversation store: SQLite backend and export
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 0
 - TAGS: memory,persistence,cli,backlog
 

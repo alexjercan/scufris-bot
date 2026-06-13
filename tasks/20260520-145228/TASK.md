@@ -1,6 +1,6 @@
 # Multi-modal image input: CLI path and Telegram attachment
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 40
 - TAGS: multimodal,cli,telegram,backlog
 

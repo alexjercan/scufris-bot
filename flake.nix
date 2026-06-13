@@ -61,9 +61,7 @@
       ];
       systems = ["x86_64-linux" "aarch64-linux" "aarch64-darwin" "x86_64-darwin"];
       perSystem = {
-        config,
         self',
-        inputs',
         pkgs,
         system,
         lib,
@@ -187,13 +185,6 @@
             ruff = mkCheck "ruff" "ruff check .";
             mypy = mkCheck "mypy" "mypy .";
             pytest = mkCheck "pytest" "pytest";
-          }
-          // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
-            scufris-vm = import ./nix/tests/scufris-vm.nix {
-              inherit pkgs;
-              scufrisModule = self.nixosModules.scufris;
-              scufrisPackage = self'.packages.scufris-server;
-            };
           };
 
         devShells.default = pkgs.mkShell {
@@ -224,66 +215,6 @@
         # The usual flake attributes can be defined here, including system-
         # agnostic ones like nixosModule and system-enumerating ones, although
         # those are more easily expressed in perSystem.
-
-        nixosModules.scufris = import ./nix/modules/scufris.nix;
-        nixosModules.default = self.nixosModules.scufris;
-
-        # New module: scufris-cli + optional scufris-server user unit.
-        # Becomes the new `default`; the legacy Telegram-bot module is
-        # still available as `homeManagerModules.scufris-bot` for users
-        # who pinned to it.
-        homeManagerModules.scufris = import ./nix/hm-modules/scufris.nix {
-          inherit self;
-        };
-        homeManagerModules.default = self.homeManagerModules.scufris;
-
-        homeManagerModules.scufris-bot = {config, lib, pkgs, ...}: let
-          cfg = config.services.scufris-bot;
-        in {
-          options.services.scufris-bot = {
-            enable = lib.mkEnableOption "Scufris Bot - Telegram bot with AI agent";
-
-            environmentFile = lib.mkOption {
-              type = lib.types.nullOr lib.types.path;
-              default = null;
-              example = "\${config.home.homeDirectory}/personal/scufris-bot/.env";
-              description = ''
-                Environment file containing secrets (TELEGRAM_BOT_TOKEN, ALLOWED_USER_IDS, etc).
-                This file should contain KEY=value pairs, one per line.
-              '';
-            };
-
-            package = lib.mkOption {
-              type = lib.types.package;
-              default = self.packages.${pkgs.system}.default;
-              description = "The scufris-bot package to use.";
-            };
-          };
-
-          config = lib.mkIf cfg.enable {
-            systemd.user.services.scufris-bot = {
-              Unit = {
-                Description = "Scufris Bot - Telegram bot with AI agent";
-                After = [ "network-online.target" ];
-              };
-
-              Service = {
-                Type = "simple";
-                WorkingDirectory = config.home.homeDirectory;
-                ExecStart = "${cfg.package}/bin/scufris-bot";
-                Restart = "always";
-                RestartSec = "10s";
-
-                # Load environment variables from file
-                EnvironmentFile = lib.mkIf (cfg.environmentFile != null) cfg.environmentFile;
-              };
-
-              Install = {
-                WantedBy = [ "default.target" ];
-              };
-            };
-          };
-        };
       };
     };
 }

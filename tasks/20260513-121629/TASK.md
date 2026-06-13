@@ -1,6 +1,6 @@
 # Journal agent: natural-language reminders and date parsing
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 0
 - TAGS: agents,journal,nlp
 

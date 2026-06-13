@@ -1,6 +1,6 @@
 # Journal agent: CalDAV/ICS calendar integration
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 0
 - TAGS: agents,journal,calendar
 

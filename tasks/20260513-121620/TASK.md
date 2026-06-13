@@ -1,6 +1,6 @@
 # CLI UX polish: slash-command autocomplete, persistent multi-line history, status pane
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 0
 - TAGS: cli,ux
 

@@ -1,6 +1,6 @@
 # Spike: scufris-server performance baseline (latency, memory, token throughput)
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 0
 - TAGS: spike,performance,server
 

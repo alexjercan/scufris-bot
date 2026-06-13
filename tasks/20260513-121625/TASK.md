@@ -1,6 +1,6 @@
 # Refactor utilities_agent into os_agent with file_management + system_monitor sub-agents
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 0
 - TAGS: refactor,agents
 

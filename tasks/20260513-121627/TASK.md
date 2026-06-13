@@ -1,6 +1,6 @@
 # Coding agent: multi-language support and sandboxed code execution
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 0
 - TAGS: agents,coding
 

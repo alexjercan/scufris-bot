@@ -1,6 +1,6 @@
 # Server observability: request IDs, structured JSON logs, /metrics endpoint
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 0
 - TAGS: server,observability
 

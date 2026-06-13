@@ -1,6 +1,6 @@
 # Spike: catalog candidate sub-agents and capabilities for v2
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 0
 - TAGS: spike,design,agents
 

@@ -1,6 +1,6 @@
 # Knowledge agent: improve reasoning loop, tool selection, and long-term memory
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 0
 - TAGS: agents,knowledge
 

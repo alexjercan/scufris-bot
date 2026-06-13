@@ -1,6 +1,6 @@
 # Persistent user facts and per-turn agent scratchpad
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 0
 - TAGS: memory,persistence,backlog
 
