@@ -103,6 +103,22 @@ class HealthResponse(BaseModel):
     version: str
 
 
+class TokenUsage(BaseModel):
+    """Token counts opencode reports for an assistant turn.
+
+    Mirrors opencode's ``AssistantMessage.tokens`` schema. ``input``
+    and ``output`` are the two consumers actually want; ``reasoning``,
+    ``total``, and ``cache`` are passed through verbatim for callers
+    (e.g. cost reporting in #28) that want them.
+    """
+
+    model_config = ConfigDict(extra="allow")
+    input: int = 0
+    output: int = 0
+    reasoning: int = 0
+    total: int | None = None
+
+
 class Session(BaseModel):
     """``POST /session`` response. Only ``id`` is required for our use."""
 
@@ -120,6 +136,8 @@ class AssistantInfo(BaseModel):
     role: str
     providerID: str | None = None
     modelID: str | None = None
+    tokens: TokenUsage | None = None
+    cost: float | None = None
 
 
 class Part(BaseModel):
@@ -154,6 +172,21 @@ class AssistantMessage(BaseModel):
         tool-only turn).
         """
         return "".join(p.text or "" for p in self.parts if p.type == "text")
+
+
+class ProviderResponse(BaseModel):
+    """Parsed shape of ``GET /provider``.
+
+    Opencode returns ``{all, default, connected}``. ``all`` is a long
+    array (~150 entries) of every provider it knows about; we ignore
+    it. ``default`` maps each ``providerID`` to that provider's default
+    ``modelID``. ``connected`` lists the providers the operator has
+    auth configured for (loopback ollama always counts).
+    """
+
+    model_config = ConfigDict(extra="allow")
+    default: dict[str, str]
+    connected: list[str]
 
 
 # ---------------------------------------------------------------------------
@@ -317,3 +350,29 @@ class OpencodeClient:
             "POST", f"/session/{session_id}/message", json=payload
         )
         return AssistantMessage.model_validate(resp.json())
+
+    async def get_default_model(self) -> ModelRef | None:
+        """Resolve a usable default ``(providerID, modelID)`` from opencode.
+
+        Algorithm (mirrors what TUI users get when they don't pick a
+        model explicitly):
+
+        1. Fetch ``GET /provider``.
+        2. Walk ``connected`` in order. For each provider id, look it
+           up in ``default``; if present, return that pair.
+        3. Return ``None`` if no connected provider has a default —
+           i.e. opencode has nothing it can route a message to. The
+           caller decides what to do (we hard-fail ``/v1/chat`` with a
+           503 in this case; see step 8 of #9).
+
+        Network errors and non-2xx responses propagate as the usual
+        :class:`OpencodeNetworkError` / :class:`OpencodeServerError`
+        exceptions; lifespan callers catch them and degrade gracefully.
+        """
+        resp = await self._request("GET", "/provider")
+        parsed = ProviderResponse.model_validate(resp.json())
+        for provider_id in parsed.connected:
+            model_id = parsed.default.get(provider_id)
+            if model_id:
+                return ModelRef(providerID=provider_id, modelID=model_id)
+        return None

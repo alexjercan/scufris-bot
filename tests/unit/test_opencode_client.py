@@ -323,6 +323,136 @@ async def test_send_message_network_error(client: OpencodeClient) -> None:
 
 
 # ---------------------------------------------------------------------------
+# get_default_model
+# ---------------------------------------------------------------------------
+
+
+def _provider_body(
+    *,
+    connected: list[str],
+    default: dict[str, str],
+    extra_all: int = 0,
+) -> dict[str, Any]:
+    """Construct a minimal /provider response.
+
+    ``extra_all`` lets us simulate the real opencode payload's noise
+    (a long ``all`` array we don't parse) without writing it out by
+    hand. The client should ignore it entirely.
+    """
+    body: dict[str, Any] = {
+        "all": [{"id": f"provider_{i}"} for i in range(extra_all)],
+        "default": default,
+        "connected": connected,
+    }
+    return body
+
+
+@pytest.mark.asyncio
+async def test_get_default_model_returns_first_connected_with_default(
+    client: OpencodeClient,
+) -> None:
+    """When ollama is connected and has a default, that pair wins."""
+    with respx.mock() as mock:
+        mock.get(f"{BASE}/provider").mock(
+            return_value=Response(
+                200,
+                json=_provider_body(
+                    connected=["ollama", "github-copilot"],
+                    default={
+                        "ollama": "qwen3:latest",
+                        "github-copilot": "claude-fable-5",
+                    },
+                    extra_all=5,
+                ),
+            )
+        )
+        ref = await client.get_default_model()
+
+    assert ref == ModelRef(providerID="ollama", modelID="qwen3:latest")
+
+
+@pytest.mark.asyncio
+async def test_get_default_model_skips_connected_without_default(
+    client: OpencodeClient,
+) -> None:
+    """A provider in ``connected`` but missing from ``default`` is skipped;
+    the next eligible provider wins."""
+    with respx.mock() as mock:
+        mock.get(f"{BASE}/provider").mock(
+            return_value=Response(
+                200,
+                json=_provider_body(
+                    connected=["broken-provider", "ollama"],
+                    default={"ollama": "qwen3:latest"},
+                ),
+            )
+        )
+        ref = await client.get_default_model()
+
+    assert ref == ModelRef(providerID="ollama", modelID="qwen3:latest")
+
+
+@pytest.mark.asyncio
+async def test_get_default_model_returns_none_when_no_connected_provider(
+    client: OpencodeClient,
+) -> None:
+    with respx.mock() as mock:
+        mock.get(f"{BASE}/provider").mock(
+            return_value=Response(
+                200,
+                json=_provider_body(
+                    connected=[],
+                    default={"ollama": "qwen3:latest"},
+                ),
+            )
+        )
+        ref = await client.get_default_model()
+
+    assert ref is None
+
+
+@pytest.mark.asyncio
+async def test_get_default_model_returns_none_when_no_connected_has_default(
+    client: OpencodeClient,
+) -> None:
+    """All connected providers exist but none has a default model — opencode
+    has nothing to route to."""
+    with respx.mock() as mock:
+        mock.get(f"{BASE}/provider").mock(
+            return_value=Response(
+                200,
+                json=_provider_body(
+                    connected=["mystery-provider"],
+                    default={"ollama": "qwen3:latest"},
+                ),
+            )
+        )
+        ref = await client.get_default_model()
+
+    assert ref is None
+
+
+@pytest.mark.asyncio
+async def test_get_default_model_5xx_raises_server_error(
+    client: OpencodeClient,
+) -> None:
+    with respx.mock() as mock:
+        mock.get(f"{BASE}/provider").mock(return_value=Response(503, text="overloaded"))
+        with pytest.raises(OpencodeServerError):
+            await client.get_default_model()
+
+
+@pytest.mark.asyncio
+async def test_get_default_model_network_error_raises_network_error(
+    client: OpencodeClient,
+) -> None:
+    with respx.mock() as mock:
+        mock.get(f"{BASE}/provider").mock(side_effect=httpx.ConnectError("refused"))
+        with pytest.raises(OpencodeNetworkError):
+            await client.get_default_model()
+
+
+# ---------------------------------------------------------------------------
 # Auth
 # ---------------------------------------------------------------------------
 

@@ -212,10 +212,10 @@ Each item is small enough to land in one commit and be reviewed independently.
    - [x] Tests: opencode up, down, version cached.
 
 8. **Routes — `chat.py` (sync only).**
-   - [ ] Request model: `ChatRequest{message: str, channel: {surface,
+   - [x] Request model: `ChatRequest{message: str, channel: {surface,
          surface_id, agent}}`. `user_id` is hard-coded to `1` for v0
          (real resolution lives in #12).
-   - [ ] Per design §9.1:
+   - [x] Per design §9.1:
          - Resolve `(user_id=1, channel) → oc_session_id` from
            `channels`/`session_links`.
          - If absent: `OpencodeClient.create_session()`, insert rows.
@@ -223,7 +223,7 @@ Each item is small enough to land in one commit and be reviewed independently.
            default model (read from opencode `/config` at app startup
            and cached) and agent from the request.
          - Return `{reply, oc_session_id, oc_message_id, tokens, cost}`.
-   - [ ] Unit tests (mocked opencode):
+   - [x] Unit tests (mocked opencode):
          - First call creates session and link rows.
          - Second call to the same channel reuses the session.
          - opencode 503 → 503 from `/v1/chat` with a structured error.
@@ -270,12 +270,12 @@ Each item is small enough to land in one commit and be reviewed independently.
 
 ## Acceptance criteria
 
-- [ ] `python -m scufris_server` starts on `127.0.0.1:7080`, prints
+- [x] `python -m scufris_server` starts on `127.0.0.1:7080`, prints
       `opencode healthy=True version=X.Y.Z` (or `False` if down) within 2s.
-- [ ] `curl localhost:7080/v1/healthz` returns 200 with the shape above.
-- [ ] `curl -XPOST localhost:7080/v1/chat -d '{...trivial prompt...}'`
+- [x] `curl localhost:7080/v1/healthz` returns 200 with the shape above.
+- [x] `curl -XPOST localhost:7080/v1/chat -d '{...trivial prompt...}'`
       returns the assistant reply, with `oc_session_id` populated.
-- [ ] Subsequent requests to the same `(surface, surface_id, agent)`
+- [x] Subsequent requests to the same `(surface, surface_id, agent)`
       tuple reuse the same opencode session (verified in DB and via
       `info.parentID` chain).
 - [ ] `pytest tests/unit/` is green offline (no opencode, no ollama).

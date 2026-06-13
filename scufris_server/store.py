@@ -2,11 +2,11 @@
 
 Connection model
 ----------------
-We open one ``sqlite3.Connection`` per request via :func:`get_conn` (used
-as a FastAPI dependency) and close it at request end. Non-request
-callers — CLI tools, migrations, tests — use :func:`connect` as a
-context manager. Connections are never shared across threads or async
-tasks.
+We open one ``sqlite3.Connection`` per request via
+:func:`scufris_server.dependencies.get_db_conn` (used as a FastAPI
+dependency) and close it at request end. Non-request callers — CLI
+tools, migrations, tests — use :func:`connect` as a context manager.
+Connections are never shared across threads or async tasks.
 
 Why per-request: ``sqlite3`` connections default to
 ``check_same_thread=True``, and FastAPI dispatches sync handlers across
@@ -76,7 +76,9 @@ def connect(settings: Settings | None = None) -> Iterator[sqlite3.Connection]:
     """Open a connection, yield it, close on exit.
 
     For CLI tools, migrations, and tests. FastAPI request handlers
-    should depend on :func:`get_conn` instead.
+    should depend on
+    :func:`scufris_server.dependencies.get_db_conn` instead, which
+    routes through request-scoped settings.
     """
     s = settings or get_settings()
     conn = _open(_db_path(s))
@@ -84,22 +86,6 @@ def connect(settings: Settings | None = None) -> Iterator[sqlite3.Connection]:
         yield conn
     finally:
         conn.close()
-
-
-def get_conn() -> Iterator[sqlite3.Connection]:
-    """FastAPI dependency: yield a connection per request, close at end.
-
-    Usage::
-
-        from fastapi import Depends
-        from scufris_server.store import get_conn
-
-        @router.get("/foo")
-        def foo(conn: sqlite3.Connection = Depends(get_conn)):
-            ...
-    """
-    with connect() as conn:
-        yield conn
 
 
 def apply_migrations(conn: sqlite3.Connection) -> list[str]:

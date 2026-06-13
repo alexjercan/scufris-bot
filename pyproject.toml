@@ -37,6 +37,9 @@ only-include = ["scufris_server", "utils", "bot.py", "cli.py", "server.py"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+markers = [
+    "integration: requires live opencode + ollama; opt-in via `-m integration`",
+]
 
 [tool.mypy]
 mypy_path = "."

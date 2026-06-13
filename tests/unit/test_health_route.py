@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -17,6 +18,11 @@ from scufris_server.config import Settings, get_settings
 
 OPENCODE_TEST_URL = "http://opencode.test"
 HEALTH_OK_BODY = {"healthy": True, "version": "1.15.13"}
+PROVIDER_OK_BODY: dict[str, Any] = {
+    "all": [],
+    "default": {"ollama": "qwen3:latest"},
+    "connected": ["ollama"],
+}
 
 
 @pytest.fixture(autouse=True)
@@ -30,6 +36,12 @@ def _make_settings(tmp_path: Path) -> Settings:
     return Settings(state_dir=tmp_path, opencode_url=OPENCODE_TEST_URL)
 
 
+def _mock_provider_ok(mock: respx.MockRouter) -> None:
+    """Stub /provider so the lifespan default-model probe doesn't blow up
+    on tests that only care about /global/health."""
+    mock.get("/provider").mock(return_value=Response(200, json=PROVIDER_OK_BODY))
+
+
 # ---------------------------------------------------------------------------
 # /v1/healthz
 # ---------------------------------------------------------------------------
@@ -41,6 +53,7 @@ def test_healthz_reports_ok_when_opencode_is_up(tmp_path: Path) -> None:
 
     with respx.mock(base_url=settings.opencode_url, assert_all_called=False) as mock:
         mock.get("/global/health").mock(return_value=Response(200, json=HEALTH_OK_BODY))
+        _mock_provider_ok(mock)
         with TestClient(app) as client:
             resp = client.get("/v1/healthz")
 
@@ -95,6 +108,7 @@ def test_healthz_refreshes_version_cache(tmp_path: Path) -> None:
     with respx.mock(base_url=settings.opencode_url, assert_all_called=False) as mock:
         # Boot probe + /v1/healthz call both consume the response.
         mock.get("/global/health").mock(return_value=Response(200, json=HEALTH_OK_BODY))
+        _mock_provider_ok(mock)
         with TestClient(app) as client:
             client.get("/v1/healthz")
             assert app.state.opencode_version == "1.15.13"
@@ -106,6 +120,7 @@ def test_healthz_includes_request_id_header(tmp_path: Path) -> None:
 
     with respx.mock(base_url=settings.opencode_url, assert_all_called=False) as mock:
         mock.get("/global/health").mock(return_value=Response(200, json=HEALTH_OK_BODY))
+        _mock_provider_ok(mock)
         with TestClient(app) as client:
             resp = client.get("/v1/healthz")
 
@@ -122,6 +137,7 @@ def test_healthz_logs_info_on_success(
 
     with respx.mock(base_url=settings.opencode_url, assert_all_called=False) as mock:
         mock.get("/global/health").mock(return_value=Response(200, json=HEALTH_OK_BODY))
+        _mock_provider_ok(mock)
         with caplog.at_level("INFO", logger="scufris_server"):
             with TestClient(app) as client:
                 client.get("/v1/healthz")
@@ -173,6 +189,7 @@ def test_version_returns_scufris_version_always(tmp_path: Path) -> None:
 
     with respx.mock(base_url=settings.opencode_url, assert_all_called=False) as mock:
         mock.get("/global/health").mock(return_value=Response(200, json=HEALTH_OK_BODY))
+        _mock_provider_ok(mock)
         with TestClient(app) as client:
             resp = client.get("/v1/version")
 
@@ -191,6 +208,7 @@ def test_version_uses_cache_filled_by_boot_probe(tmp_path: Path) -> None:
         boot_route = mock.get("/global/health").mock(
             return_value=Response(200, json=HEALTH_OK_BODY)
         )
+        _mock_provider_ok(mock)
         with TestClient(app) as client:
             assert boot_route.call_count == 1  # boot probe
             resp = client.get("/v1/version")
@@ -249,6 +267,7 @@ def test_version_cache_persists_across_calls(tmp_path: Path) -> None:
         boot_route = mock.get("/global/health").mock(
             return_value=Response(200, json=HEALTH_OK_BODY)
         )
+        _mock_provider_ok(mock)
         with TestClient(app) as client:
             client.get("/v1/version")  # cache hit (filled by boot probe)
             client.get("/v1/version")  # still cache hit
@@ -266,6 +285,7 @@ def test_version_logs_info_on_cache_hit(
 
     with respx.mock(base_url=settings.opencode_url, assert_all_called=False) as mock:
         mock.get("/global/health").mock(return_value=Response(200, json=HEALTH_OK_BODY))
+        _mock_provider_ok(mock)
         with TestClient(app) as client:
             # Boot probe fills the cache; clear records so we only see the
             # /v1/version log line.

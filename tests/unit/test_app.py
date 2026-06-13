@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -18,6 +19,11 @@ from scufris_server.store import connect
 
 OPENCODE_TEST_URL = "http://opencode.test"
 HEALTH_OK_BODY = {"healthy": True, "version": "1.15.13"}
+PROVIDER_OK_BODY: dict[str, Any] = {
+    "all": [],
+    "default": {"ollama": "qwen3:latest"},
+    "connected": ["ollama"],
+}
 
 
 @pytest.fixture(autouse=True)
@@ -32,6 +38,12 @@ def _make_settings(tmp_path: Path, url: str = OPENCODE_TEST_URL) -> Settings:
     return Settings(state_dir=tmp_path, opencode_url=url)
 
 
+def _mock_happy_opencode(mock: respx.MockRouter) -> None:
+    """Register the standard set of happy-boot mocks: health + provider."""
+    mock.get("/global/health").mock(return_value=Response(200, json=HEALTH_OK_BODY))
+    mock.get("/provider").mock(return_value=Response(200, json=PROVIDER_OK_BODY))
+
+
 # ---------------------------------------------------------------------------
 # Happy boot
 # ---------------------------------------------------------------------------
@@ -42,7 +54,7 @@ def test_lifespan_happy_boot_migrates_and_probes_health(tmp_path: Path) -> None:
     app = create_app(settings)
 
     with respx.mock(base_url=settings.opencode_url, assert_all_called=False) as mock:
-        mock.get("/global/health").mock(return_value=Response(200, json=HEALTH_OK_BODY))
+        _mock_happy_opencode(mock)
         with TestClient(app):
             # Settings stashed for later dependency lookups.
             assert app.state.settings is settings
@@ -71,6 +83,106 @@ def test_lifespan_happy_boot_migrates_and_probes_health(tmp_path: Path) -> None:
 
     # Shutdown ran — client closed.
     assert app.state.opencode._client.is_closed
+
+
+def test_lifespan_seeds_default_user_idempotently(tmp_path: Path) -> None:
+    """``users(id=1)`` is seeded once and stays stable across boots."""
+    settings = _make_settings(tmp_path)
+
+    with respx.mock(base_url=settings.opencode_url, assert_all_called=False) as mock:
+        _mock_happy_opencode(mock)
+        # First boot.
+        app1 = create_app(settings)
+        with TestClient(app1):
+            with connect(settings) as conn:
+                rows = [
+                    (r["id"], r["username"])
+                    for r in conn.execute("SELECT id, username FROM users")
+                ]
+            assert rows == [(1, "default")]
+
+        # Second boot reusing the same DB — should not duplicate.
+        app2 = create_app(settings)
+        with TestClient(app2):
+            with connect(settings) as conn:
+                rows = [
+                    (r["id"], r["username"])
+                    for r in conn.execute("SELECT id, username FROM users ORDER BY id")
+                ]
+            assert rows == [(1, "default")]
+
+
+def test_lifespan_caches_default_model_after_health_success(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+
+    with respx.mock(base_url=settings.opencode_url, assert_all_called=False) as mock:
+        _mock_happy_opencode(mock)
+        with TestClient(app):
+            ref = app.state.opencode_default_model
+            assert ref is not None
+            assert ref.providerID == "ollama"
+            assert ref.modelID == "qwen3:latest"
+
+
+def test_lifespan_default_model_probe_failure_leaves_cache_none(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Health succeeds; /provider fails. App still boots; chat will 503."""
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+
+    with respx.mock(base_url=settings.opencode_url, assert_all_called=False) as mock:
+        mock.get("/global/health").mock(return_value=Response(200, json=HEALTH_OK_BODY))
+        mock.get("/provider").mock(return_value=Response(503, text="overloaded"))
+        with caplog.at_level("WARNING", logger="scufris_server"):
+            with TestClient(app):
+                assert app.state.opencode_default_model is None
+
+    assert any(
+        "default-model probe failed" in r.getMessage() for r in caplog.records
+    ), f"expected probe-failed warning, got: {[r.getMessage() for r in caplog.records]}"
+
+
+def test_lifespan_default_model_none_when_no_connected_provider(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """opencode is up but has nothing connected — chat will 503."""
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+
+    with respx.mock(base_url=settings.opencode_url, assert_all_called=False) as mock:
+        mock.get("/global/health").mock(return_value=Response(200, json=HEALTH_OK_BODY))
+        mock.get("/provider").mock(
+            return_value=Response(200, json={"all": [], "default": {}, "connected": []})
+        )
+        with caplog.at_level("WARNING", logger="scufris_server"):
+            with TestClient(app):
+                assert app.state.opencode_default_model is None
+
+    assert any("no connected provider" in r.getMessage() for r in caplog.records), (
+        f"expected no-connected warning, got: {[r.getMessage() for r in caplog.records]}"
+    )
+
+
+def test_lifespan_skips_default_model_probe_on_degraded_boot(tmp_path: Path) -> None:
+    """When health fails we don't even try /provider — same upstream wall."""
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+
+    with respx.mock(base_url=settings.opencode_url, assert_all_called=False) as mock:
+        health_route = mock.get("/global/health").mock(
+            side_effect=httpx.ConnectError("refused")
+        )
+        provider_route = mock.get("/provider").mock(
+            return_value=Response(200, json=PROVIDER_OK_BODY)
+        )
+        with TestClient(app):
+            assert app.state.opencode_initial_health is None
+            assert app.state.opencode_default_model is None
+
+    assert health_route.called
+    assert not provider_route.called, "should not have probed /provider"
 
 
 # ---------------------------------------------------------------------------
@@ -167,7 +279,7 @@ def test_openapi_metadata_matches_package(tmp_path: Path) -> None:
     app = create_app(settings)
 
     with respx.mock(base_url=settings.opencode_url, assert_all_called=False) as mock:
-        mock.get("/global/health").mock(return_value=Response(200, json=HEALTH_OK_BODY))
+        _mock_happy_opencode(mock)
         with TestClient(app) as test_client:
             resp = test_client.get("/openapi.json")
 

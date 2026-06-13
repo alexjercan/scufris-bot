@@ -5,15 +5,20 @@ cycle: routes need DI helpers, ``app`` mounts the routers, so the
 helpers must live in a module that neither side has to import the
 other to reach.
 
-Step 7 only needs the opencode-client dependency. Step 8 (chat) will
-add a DB connection dependency here.
+Step 7 added :func:`get_opencode_client`. Step 8 (chat) adds
+:func:`get_db_conn` so handlers can use SQLite without re-deriving
+the path or the lifespan singleton.
 """
 
 from __future__ import annotations
 
+import sqlite3
+from collections.abc import AsyncIterator
+
 from fastapi import Request
 
 from scufris_server.opencode_client import OpencodeClient
+from scufris_server.store import connect
 
 
 def get_opencode_client(request: Request) -> OpencodeClient:
@@ -30,3 +35,44 @@ def get_opencode_client(request: Request) -> OpencodeClient:
     """
     client: OpencodeClient = request.app.state.opencode
     return client
+
+
+async def get_db_conn(request: Request) -> AsyncIterator[sqlite3.Connection]:
+    """FastAPI dependency: yield a per-request SQLite connection.
+
+    Honours the request-scoped :class:`scufris_server.config.Settings`
+    that :func:`scufris_server.app.create_app` stashed at startup, so
+    test apps with overridden ``state_dir`` get isolated DB files.
+
+    Async vs sync: this is declared ``async`` deliberately. SQLite
+    connections are pinned to the thread that opened them
+    (``check_same_thread=True``), and FastAPI runs sync generator
+    deps in its threadpool while async handlers stay on the event
+    loop — a sync dep would yield a connection that the async
+    handler can't legally touch. Going async keeps the dep on the
+    same loop thread as the handler. The cost is minimal: opening a
+    WAL-mode SQLite connection is a microsecond-scale operation, so
+    blocking the event loop briefly is fine.
+
+    Transaction policy: handlers manage their own commits/rollbacks
+    via ``with conn:`` blocks. We don't auto-commit here because read
+    paths shouldn't issue silent BEGINs and write paths should be
+    explicit about the unit of work.
+
+    On request exit (success or failure) the underlying connection is
+    closed by :func:`scufris_server.store.connect`. Any uncommitted
+    transaction is rolled back by SQLite at close time, so a crashed
+    handler can't leak partial state.
+
+    Usage::
+
+        from fastapi import Depends
+        from scufris_server.dependencies import get_db_conn
+
+        @router.post("/foo")
+        async def foo(conn: sqlite3.Connection = Depends(get_db_conn)):
+            ...
+    """
+    settings = request.app.state.settings
+    with connect(settings) as conn:
+        yield conn
