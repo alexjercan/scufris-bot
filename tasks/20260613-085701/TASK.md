@@ -1,6 +1,6 @@
 # Plan scufris-v2: opencode-based rewrite backlog
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 100
 - TAGS: planning,opencode,rewrite
 
@@ -182,17 +182,98 @@ Format: `title, priority, tags` — one-line note follows each.
 
 ## Acceptance criteria
 
-- [ ] Backlog above reviewed against v1 scope for gaps (anything from
+- [x] Backlog above reviewed against v1 scope for gaps (anything from
       scufris-bot's feature set that's missing here is added as a new
       row before filing).
-- [ ] One `tatr` task filed per backlog row above, with the given
+- [x] One `tatr` task filed per backlog row above, with the given
       title/priority/tags and a short (1–3 sentence) description.
-- [ ] Sequencing notes captured (at minimum: #1 and #2 block most
+- [x] Sequencing notes captured (at minimum: #1 and #2 block most
       other tasks; tools (#4–8) should land before or alongside the
       clients that exercise them; #21–24 can proceed in parallel with
       the server/client work once #1/#2 settle the package layout).
-- [ ] Each filed task cross-references this planning doc (e.g.
+- [x] Each filed task cross-references this planning doc (e.g.
       "Spun off from scufris-v2 planning doc").
+
+## Filed tasks
+
+The 29 spun-off tasks (27 from the backlog above + 2 v1-scope gap items
+added during review — see Notes), in filing order:
+
+| # | Task ID            | P  | Title                                                                          |
+|---|--------------------|----|--------------------------------------------------------------------------------|
+| 1 | `20260613-091035`  | 95 | Spike: opencode as agent runtime — sessions, tools, plugin API, config model   |
+| 2 | `20260613-091036`  | 90 | Design doc: scufris-v2 architecture around opencode                            |
+| 3 | `20260613-091037`  | 70 | Spike: per-(user, agent) session/context model on top of opencode              |
+| 4 | `20260613-091038`  | 85 | Port journal tools (today/daily/macros) as opencode tools                      |
+| 5 | `20260613-091039`  | 75 | Port weather/web_search/calculator/datetime tools to opencode                  |
+| 6 | `20260613-091040`  | 40 | OS agent tools (file management, system monitor) for opencode                  |
+| 7 | `20260613-091041`  | 30 | Calendar (CalDAV/ICS) tools for opencode                                       |
+| 8 | `20260613-091042`  | 30 | Reminder / NL date parsing tools for opencode                                  |
+| 9 | `20260613-091043`  | 90 | scufris-server v2: HTTP daemon wrapping opencode serve                         |
+| 10| `20260613-091044`  | 85 | Per-user opencode session management (create/resume/expire)                    |
+| 11| `20260613-091045`  | 75 | SSE streaming of opencode 'thinking' events                                    |
+| 12| `20260613-091046`  | 75 | Identity layer + XDG user config (config.toml)                                 |
+| 13| `20260613-091047`  | 50 | /stats and /clear endpoints + per-user telemetry                               |
+| 14| `20260613-091048`  | 40 | Auth: bearer token for non-localhost binds                                     |
+| 15| `20260613-091049`  | 80 | scufris-cli v2: REPL client over HTTP                                          |
+| 16| `20260613-091050`  | 75 | Telegram bot v2: client over HTTP                                              |
+| 17| `20260613-091051`  | 20 | CLI UX polish: autocomplete, multiline history, status pane                    |
+| 18| `20260613-091052`  | 60 | Persistent conversation/session store (SQLite)                                 |
+| 19| `20260613-091053`  | 40 | User facts store + remember/forget tools                                       |
+| 20| `20260613-091054`  | 35 | History compaction strategy for opencode context windows                       |
+| 21| `20260613-091056`  | 70 | Nix flake: package scufris-server-v2 and scufris-cli-v2 (uv2nix, flake-parts)  |
+| 22| `20260613-091057`  | 60 | NixOS module + hardened systemd unit                                           |
+| 23| `20260613-091058`  | 55 | Home Manager module                                                            |
+| 24| `20260613-091059`  | 50 | CI: GitHub Actions for ruff/pytest/mypy/nix flake check                        |
+| 25| `20260613-091100`  | 30 | Secrets/config injection guide (env-file / sops-nix / agenix)                  |
+| 26| `20260613-091101`  | 45 | Test harness with mocked opencode client                                       |
+| 27| `20260613-091102`  | 15 | Decommission/retire old LangChain-based scufris-bot                            |
+| 28| `20260613-091103`  | 50 | Server observability: request IDs, structured JSON logs, /metrics endpoint    *(gap-fill)* |
+| 29| `20260613-091104`  | 35 | Spike: scufris-server-v2 performance baseline (latency, memory, throughput)   *(gap-fill)* |
+
+## Sequencing
+
+A sketch of which tasks block which. Priorities are aligned to
+roughly match this order, but the dependencies below override raw
+priority where they conflict.
+
+- **Foundations first.**  #1 (opencode capabilities spike) and #2
+  (architecture design doc) block essentially every other task. #1
+  feeds #2; #2 feeds the rest. Don't pick up implementation work until
+  both have landed.
+- **Session-model spike scopes the memory tasks.**  #3 (per-(user,
+  agent) session/context spike) is what tells us whether we still need
+  #18 (SQLite persistent store), #19 (user facts store), and #20
+  (compaction). All three should wait on #3's output.
+- **Tools before clients.**  #4–#8 (journal / web / OS / calendar /
+  reminder tools) should land before or alongside #15 (CLI v2) and
+  #16 (Telegram v2) so the clients have something interesting to
+  exercise. The tool ports themselves can run in parallel with each
+  other once #1/#2 settle the tool-registration shape.
+- **Server before clients.**  #9 (server v2) is a hard prerequisite
+  for #15 and #16. #10 (session management) and #11 (SSE thinking
+  events) are part of the server-v2 surface; ideally they land in the
+  same wave.
+- **Identity layer is cross-cutting.**  #12 (identity + XDG config)
+  affects #9, #10, #13, #15, #16. Easier to land #12 with #9 than to
+  retrofit it.
+- **Observability and stats can ride alongside the server.**  #11,
+  #13, and #28 (gap-fill server observability) all touch the same
+  request/streaming path; sequence them together once #9 has a stable
+  shape.
+- **Packaging / ops can run in parallel with server/client work.**
+  #21 (Nix flake) only needs the v2 package layout to be settled
+  (output of #2). Once #21 lands, #22 (NixOS module), #23 (Home
+  Manager module), and #24 (CI) can proceed in parallel with each
+  other and with the server/client tracks. #25 (secrets doc) is a
+  late-stage docs task.
+- **Quality gates land last in each wave.**  #26 (mocked opencode
+  test harness) is most useful once #9 and a couple of tools exist
+  to exercise it, but starting it earlier as a stub is fine. #29
+  (gap-fill perf baseline spike) should wait until #9 is functional
+  enough to bench against a stubbed opencode endpoint.
+- **#27 (decommission v1) is terminal.**  Don't touch until v2 is in
+  production use and parity has been verified.
 
 ## Notes
 
@@ -204,6 +285,17 @@ Format: `title, priority, tags` — one-line note follows each.
   suggestions, multi-modal image input) are deliberately **not**
   included here — they're future-sprint material and should be
   re-evaluated once v2's core (items #1–17) is stable.
+- During the v1-scope review, two further v1 backlog items were
+  identified that did not appear in the original 27-row backlog and
+  were not on the explicit deferral list above: server observability
+  (v1 `20260513-121622`) and a server perf baseline spike (v1
+  `20260513-121621`). They were filed as gap-fill items #28 and #29
+  with priorities (50, 35) chosen to match their v1-equivalent role
+  (operational, not blocking the core).
+- Other v1 sub-agent items (knowledge-agent improvements, coding-agent
+  sandbox, sub-agent catalog spike) are deliberately **not** carried
+  over: they're explicitly the kind of "custom agent loop / per-sub-
+  agent prompt engineering" work that opencode now owns.
 - Priorities are a starting point; adjust when filing if the opencode
   spike (#1) reveals that some items are trivial (opencode handles it
   natively) or much harder than expected.
