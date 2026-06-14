@@ -1,0 +1,36 @@
+# scufris-server user identity (#12).
+#
+# Single-user shape — v1 carryover. See README "User identity"
+# section for the resolution algorithm and the override semantics.
+#
+# When a request hits POST /v1/chat or POST /v1/identity/resolve,
+# scufris-server matches (surface, surface_id) against the
+# [user.identity] mapping below. A match binds that surface_id to
+# this user (writing a row to surface_bindings); a miss falls
+# through to the seeded default user (id=1).
+
+[user]
+# Required. Inserted into the users.username column on first match.
+# Must be unique across the users table.
+username = "alex"
+
+[user.identity]
+# Surface name → surface_id. Free-form keys; any string surface name
+# works as long as the value is a string. Add new entries here as
+# new surfaces come online.
+cli      = "alex"
+telegram = "8231376426"
+# web   = "alex@example.com"   # uncomment once a web surface lands
+
+# ---------------------------------------------------------------------------
+# v1 sub-tables below are tolerated but currently ignored by v2.
+# Future tasks will pick them up:
+#   - [user.schedule]      — scheduler (out of v2 scope for now)
+#   - [user.rag]           — RAG/journal tooling (091038)
+#   - [user.journal]       — journal tooling (091038)
+#   - [user.notifications] — notifications (future)
+#   - [server]             — env vars own deployment config in v2
+# Leaving them in place is harmless — pydantic extra="ignore" drops
+# them silently and the lifespan logs the ignored top-level keys at
+# startup so you can spot stale entries.
+# ---------------------------------------------------------------------------

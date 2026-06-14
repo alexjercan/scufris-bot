@@ -90,6 +90,31 @@ class Settings(BaseSettings):
         validation_alias="SCUFRIS_STATE_DIR",
         description="Directory for SQLite DB and other persistent state.",
     )
+    user_id: int | None = Field(
+        default=None,
+        ge=1,
+        validation_alias="SCUFRIS_USER_ID",
+        description=(
+            "Server-side identity override (#12). When set, every call to "
+            "``resolve_user`` short-circuits to this user_id, bypassing the "
+            "TOML lookup and skipping any ``surface_bindings`` insert. "
+            "Useful for single-user dev/test deployments and for the v1 "
+            "carryover where the bot pinned itself to a known id."
+        ),
+    )
+    config_path: Path | None = Field(
+        default=None,
+        validation_alias="SCUFRIS_CONFIG",
+        description=(
+            "Explicit path to ``config.toml`` (#12). When ``None`` (the "
+            "default), :func:`scufris_server.identity.load_user_identity` "
+            "resolves ``$XDG_CONFIG_HOME/scufris/config.toml`` (falling "
+            "back to ``~/.config/scufris/config.toml``). When set, that "
+            "exact path is used. A non-existent path is *not* an error — "
+            "the loader treats it as 'no user defined' and only the "
+            "default user (id=1) will resolve."
+        ),
+    )
 
 
 @lru_cache(maxsize=1)

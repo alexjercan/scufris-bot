@@ -7,7 +7,10 @@ other to reach.
 
 Step 7 added :func:`get_opencode_client`. Step 8 (chat) adds
 :func:`get_db_conn` so handlers can use SQLite without re-deriving
-the path or the lifespan singleton.
+the path or the lifespan singleton. #12 (identity) adds
+:func:`get_user_identity` and :func:`get_identity_override` so chat
+and identity routes can read the lifespan-cached config.toml +
+``SCUFRIS_USER_ID`` override.
 """
 
 from __future__ import annotations
@@ -17,6 +20,7 @@ from collections.abc import AsyncIterator
 
 from fastapi import Request
 
+from scufris_server.identity import IdentityFile
 from scufris_server.opencode_client import OpencodeClient
 from scufris_server.store import connect
 
@@ -76,3 +80,38 @@ async def get_db_conn(request: Request) -> AsyncIterator[sqlite3.Connection]:
     settings = request.app.state.settings
     with connect(settings) as conn:
         yield conn
+
+
+def get_user_identity(request: Request) -> IdentityFile:
+    """FastAPI dependency: return the lifespan-loaded identity config.
+
+    The :class:`IdentityFile` is parsed once at startup (see
+    :func:`scufris_server.app.lifespan`) and stashed on
+    ``app.state.user_identity``. Always present — when no
+    ``config.toml`` is found, the lifespan stores an empty
+    :class:`IdentityFile` (``user=None``), which makes every
+    :func:`scufris_server.identity.resolve_user` call fall through
+    to the default user.
+
+    No reload-on-change: the v1 design (and ours) requires a
+    restart to pick up TOML edits. Hot-reload via SIGHUP is
+    explicitly out of scope for #12.
+    """
+    identity: IdentityFile = request.app.state.user_identity
+    return identity
+
+
+def get_identity_override(request: Request) -> int | None:
+    """FastAPI dependency: return ``SCUFRIS_USER_ID`` if set, else None.
+
+    The override (#12 D4) pins every ``resolve_user`` call to a
+    single ``user_id`` for the process's lifetime. It's set once at
+    startup from :class:`Settings.user_id` and stashed on
+    ``app.state.identity_override``.
+
+    The lifespan validates that the override id exists in the
+    ``users`` table before yielding control — so a non-None value
+    here is guaranteed to resolve cleanly.
+    """
+    override: int | None = request.app.state.identity_override
+    return override

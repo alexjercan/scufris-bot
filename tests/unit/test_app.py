@@ -15,6 +15,7 @@ from httpx import Response
 from scufris_server import __version__
 from scufris_server.app import create_app
 from scufris_server.config import Settings, get_settings
+from scufris_server.identity import IdentityFile
 from scufris_server.store import connect
 
 OPENCODE_TEST_URL = "http://opencode.test"
@@ -240,6 +241,157 @@ def test_lifespan_logs_warning_on_degraded_boot(
     assert any("opencode unreachable" in r.getMessage() for r in warnings), (
         f"expected degraded-boot warning, got: {[r.getMessage() for r in warnings]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Identity (#12)
+# ---------------------------------------------------------------------------
+
+
+def _write_config_toml(path: Path, body: str) -> Path:
+    """Write ``body`` to ``path``, creating parents. Returns the path."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+def test_lifespan_loads_empty_identity_when_config_file_missing(
+    tmp_path: Path,
+) -> None:
+    """``app.state.user_identity`` is always populated.
+
+    Pointing ``config_path`` at a non-existent file must yield an
+    empty :class:`IdentityFile` (``user=None``) rather than raising —
+    that's the contract :func:`identity.load_user_identity` documents.
+    """
+    settings = Settings(
+        state_dir=tmp_path,
+        opencode_url=OPENCODE_TEST_URL,
+        config_path=tmp_path / "nonexistent.toml",
+    )
+    app = create_app(settings)
+
+    with respx.mock(base_url=settings.opencode_url, assert_all_called=False) as mock:
+        _mock_happy_opencode(mock)
+        with TestClient(app):
+            identity = app.state.user_identity
+            assert isinstance(identity, IdentityFile)
+            assert identity.user is None
+
+
+def test_lifespan_loads_identity_from_explicit_config_path(
+    tmp_path: Path,
+) -> None:
+    """``Settings.config_path`` overrides the XDG default and the file
+    contents are parsed into ``app.state.user_identity``."""
+    config = _write_config_toml(
+        tmp_path / "config.toml",
+        # Single-user shape (v1 carryover, design §11).
+        '[user]\n'
+        'username = "alex"\n'
+        '[user.identity]\n'
+        'cli = "alex"\n'
+        'telegram = "8231376426"\n',
+    )
+    settings = Settings(
+        state_dir=tmp_path,
+        opencode_url=OPENCODE_TEST_URL,
+        config_path=config,
+    )
+    app = create_app(settings)
+
+    with respx.mock(base_url=settings.opencode_url, assert_all_called=False) as mock:
+        _mock_happy_opencode(mock)
+        with TestClient(app):
+            identity = app.state.user_identity
+            assert isinstance(identity, IdentityFile)
+            assert identity.user is not None
+            assert identity.user.username == "alex"
+            assert identity.user.identity == {
+                "cli": "alex",
+                "telegram": "8231376426",
+            }
+
+
+def test_lifespan_falls_back_to_xdg_config_home_when_config_path_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When ``Settings.config_path`` is ``None``, the lifespan defers
+    to :func:`identity._xdg_config_path` which honours
+    ``$XDG_CONFIG_HOME``."""
+    xdg = tmp_path / "xdg"
+    _write_config_toml(
+        xdg / "scufris" / "config.toml",
+        '[user]\nusername = "xdg-user"\n',
+    )
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg))
+
+    settings = Settings(state_dir=tmp_path, opencode_url=OPENCODE_TEST_URL)
+    # Sanity: nothing in Settings is pinning the path; we're really
+    # exercising the XDG fallback.
+    assert settings.config_path is None
+
+    app = create_app(settings)
+    with respx.mock(base_url=settings.opencode_url, assert_all_called=False) as mock:
+        _mock_happy_opencode(mock)
+        with TestClient(app):
+            identity = app.state.user_identity
+            assert identity.user is not None
+            assert identity.user.username == "xdg-user"
+
+
+def test_lifespan_identity_override_is_none_by_default(tmp_path: Path) -> None:
+    """No ``SCUFRIS_USER_ID`` set → no override; ``resolve_user`` will
+    fall through to TOML / default-user resolution."""
+    settings = _make_settings(tmp_path)
+    assert settings.user_id is None  # precondition
+    app = create_app(settings)
+
+    with respx.mock(base_url=settings.opencode_url, assert_all_called=False) as mock:
+        _mock_happy_opencode(mock)
+        with TestClient(app):
+            assert app.state.identity_override is None
+
+
+def test_lifespan_caches_identity_override_when_user_exists(
+    tmp_path: Path,
+) -> None:
+    """``user_id=1`` matches the seeded default user, so validation
+    succeeds and the override is cached on ``app.state``."""
+    settings = Settings(
+        state_dir=tmp_path,
+        opencode_url=OPENCODE_TEST_URL,
+        user_id=1,
+    )
+    app = create_app(settings)
+
+    with respx.mock(base_url=settings.opencode_url, assert_all_called=False) as mock:
+        _mock_happy_opencode(mock)
+        with TestClient(app):
+            assert app.state.identity_override == 1
+
+
+def test_lifespan_raises_when_identity_override_user_missing(
+    tmp_path: Path,
+) -> None:
+    """``SCUFRIS_USER_ID=999`` with no such user must blow up at boot.
+
+    Discovering the misconfig on the first chat request would be
+    silent corruption (chat would 500 with a stale FK error). The
+    fast crash is documented in :func:`app._validate_identity_override`.
+    """
+    settings = Settings(
+        state_dir=tmp_path,
+        opencode_url=OPENCODE_TEST_URL,
+        user_id=999,
+    )
+    app = create_app(settings)
+
+    with respx.mock(base_url=settings.opencode_url, assert_all_called=False) as mock:
+        _mock_happy_opencode(mock)
+        with pytest.raises(RuntimeError, match="SCUFRIS_USER_ID=999"):
+            with TestClient(app):
+                pass
 
 
 # ---------------------------------------------------------------------------

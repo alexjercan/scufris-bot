@@ -49,6 +49,94 @@ All settings have sensible defaults. Override via env vars:
 | `SCUFRIS_STATE_DIR`         | `$XDG_STATE_HOME/scufris`| SQLite DB lives here as `scufris.sqlite`.             |
 | `OPENCODE_URL`              | `http://127.0.0.1:4096`  | Where `opencode serve` is reachable.                  |
 | `OPENCODE_SERVER_PASSWORD`  | _(unset)_                | Sent as Bearer token if `opencode` requires one.      |
+| `SCUFRIS_CONFIG`            | _(unset)_                | Explicit path to `config.toml`. Falls back to `$XDG_CONFIG_HOME/scufris/config.toml` (then `~/.config/scufris/config.toml`) when unset. |
+| `SCUFRIS_USER_ID`           | _(unset)_                | Server-side identity override. Pins every chat / resolve call to this `users.id`, bypassing TOML lookup and the `surface_bindings` cache. Validated at boot — a stale id crashes startup. |
+
+### User identity
+
+`scufris-server` keeps a `users` table and a `surface_bindings` table
+in SQLite. Every chat lands in a `channels` row keyed by
+`(user_id, surface, surface_id, agent)`, so the server has to map the
+incoming `(surface, surface_id)` pair to a `users.id` before it can
+persist anything.
+
+The mapping is driven by `~/.config/scufris/config.toml` (or
+`$SCUFRIS_CONFIG` when set). The shape is single-user and matches the
+v1 layout verbatim — only `[user]` and `[user.identity]` are read
+today; other sub-tables (`[user.schedule]`, `[user.rag]`, …) are
+silently ignored and will be picked up by future tasks.
+
+```toml
+# ~/.config/scufris/config.toml
+[user]
+username = "alex"
+
+[user.identity]
+cli      = "alex"
+telegram = "8231376426"
+```
+
+#### Resolution algorithm
+
+For each `(surface, surface_id)` request, `scufris-server` consults
+in order:
+
+1. **Override** — if `SCUFRIS_USER_ID` is set, return that user
+   verbatim. No TOML lookup, no `surface_bindings` write.
+2. **Existing binding** — if `surface_bindings` already maps the pair
+   to a `users.id`, return that user. Bindings are sticky; once
+   materialised, TOML edits don't re-route them.
+3. **TOML hit** — if `[user.identity]` lists this `surface_id` under
+   the matching surface key, materialise the user row (lazy insert
+   into `users`), write a `surface_bindings` row, and return.
+4. **Default fallback** — bind unknown pairs to `users.id=1` (the
+   `default` user seeded at boot) and write a `surface_bindings`
+   row. Catches every surface the operator hasn't enumerated.
+
+Steps 3 and 4 both write the binding row, so the *next* call for the
+same pair short-circuits at step 2.
+
+A missing `config.toml` is fine — every request falls through to
+step 4. A *malformed* `config.toml` is fatal: the lifespan refuses
+to start rather than silently downgrade everyone to the default
+user.
+
+#### Probing identity directly
+
+`POST /v1/identity/resolve` exposes the same algorithm without
+sending a chat message. Useful for surfaces that want to display
+"signed in as …" before any conversation:
+
+```bash
+curl -s -X POST http://127.0.0.1:7080/v1/identity/resolve \
+  -H 'content-type: application/json' \
+  -d '{"surface": "cli", "surface_id": "alex"}' | jq
+# {
+#   "user_id": 2,
+#   "username": "alex",
+#   "surface": "cli",
+#   "surface_id": "alex",
+#   "bound_surfaces": [
+#     { "surface": "cli", "surface_id": "alex" }
+#   ]
+# }
+```
+
+`bound_surfaces` lists every `surface_bindings` row for the resolved
+user, sorted `(surface, surface_id)` for stable rendering.
+
+#### Override use case
+
+Set `SCUFRIS_USER_ID=N` for single-user dev/test deploys where every
+incoming surface should be pinned to one identity regardless of TOML
+content. The override:
+
+- Skips TOML lookup entirely.
+- Skips `surface_bindings` writes — bindings stay clean for when you
+  remove the override later.
+- Validates `N` against `users` at boot: a stale id (e.g. you
+  deleted the row by hand) fails fast with a `RuntimeError` rather
+  than surfacing as a 500 on the first chat request.
 
 ### Smoke test
 

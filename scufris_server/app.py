@@ -10,18 +10,26 @@ Lifespan order
 --------------
 1. Apply pending SQLite migrations (fatal on failure — wrong schema
    means no later step works).
-2. Seed the ``users(id=1)`` placeholder row used by v0's hard-coded
-   identity (real identity resolution lives in #12). Idempotent.
-3. Construct the :class:`OpencodeClient` and stash it on
+2. Seed the ``users(id=1)`` placeholder row used as the default
+   identity. ``resolve_user`` falls back here when no TOML user
+   matches and no override is set. Idempotent.
+3. Load ``config.toml`` via :func:`scufris_server.identity.load_user_identity`
+   and cache on ``app.state.user_identity``. Always populated —
+   missing file produces an empty :class:`IdentityFile`.
+4. Validate ``SCUFRIS_USER_ID`` if set: the override id must exist
+   in ``users``. Cache the validated override on
+   ``app.state.identity_override``. Fail fast (RuntimeError) on a
+   stale value — discovering it on the first chat request is worse.
+5. Construct the :class:`OpencodeClient` and stash it on
    ``app.state.opencode`` for dependency injection.
-4. Probe ``/global/health`` with a 30s budget. *Failure is not fatal*;
+6. Probe ``/global/health`` with a 30s budget. *Failure is not fatal*;
    the server boots in degraded mode and step 7's ``/v1/healthz`` will
    report it.
-5. If the health probe succeeded, probe ``/provider`` and cache a
+7. If the health probe succeeded, probe ``/provider`` and cache a
    default ``ModelRef``. Failure here is also non-fatal; ``/v1/chat``
    hard-fails with 503 in that case until opencode comes back.
-6. Yield to the running app.
-7. On shutdown, close the opencode client.
+8. Yield to the running app.
+9. On shutdown, close the opencode client.
 
 State attached to ``app.state``
 -------------------------------
@@ -36,6 +44,12 @@ State attached to ``app.state``
   ``/v1/chat`` when no explicit model is supplied. ``None`` when
   opencode has nothing connected — chat hard-fails with 503 in that
   state.
+- ``user_identity`` (#12): the parsed :class:`IdentityFile` from
+  ``config.toml``. Always present; ``user=None`` when no file
+  exists.
+- ``identity_override`` (#12): :data:`Settings.user_id` after
+  validation against the ``users`` table, or ``None``. When
+  non-None, every ``resolve_user`` call short-circuits to this id.
 """
 
 from __future__ import annotations
@@ -50,6 +64,12 @@ from fastapi import FastAPI
 
 from scufris_server import __version__
 from scufris_server.config import Settings, get_settings
+from scufris_server.identity import (
+    DEFAULT_USER_ID,
+    DEFAULT_USERNAME,
+    IdentityFile,
+    load_user_identity,
+)
 from scufris_server.logging import RequestIdMiddleware
 from scufris_server.opencode_client import (
     HealthResponse,
@@ -71,10 +91,6 @@ HEALTH_PROBE_TIMEOUT_S = 30.0
 # probe — bounds boot time when opencode is reachable but slow.
 DEFAULT_MODEL_PROBE_TIMEOUT_S = 30.0
 
-# Hard-coded for v0 per #9 step 8; real identity resolution is #12.
-DEFAULT_USER_ID = 1
-DEFAULT_USERNAME = "default"
-
 
 def _seed_default_user(settings: Settings) -> None:
     """Ensure ``users(id=1)`` exists so channels can FK to it.
@@ -90,6 +106,38 @@ def _seed_default_user(settings: Settings) -> None:
             (DEFAULT_USER_ID, DEFAULT_USERNAME, int(time.time())),
         )
         conn.commit()
+
+
+def _validate_identity_override(settings: Settings) -> int | None:
+    """Validate ``settings.user_id`` against the users table.
+
+    Returns the validated override (or ``None`` when unset). Raises
+    :class:`RuntimeError` if the override points at a non-existent
+    user — that's a misconfiguration we want surfaced at boot, not on
+    the first chat request.
+    """
+    if settings.user_id is None:
+        return None
+    with connect(settings) as conn:
+        row = conn.execute(
+            "SELECT username FROM users WHERE id = ?", (settings.user_id,)
+        ).fetchone()
+    if row is None:
+        raise RuntimeError(
+            f"SCUFRIS_USER_ID={settings.user_id} is set but no user with "
+            "that id exists. Either remove the env var, lower it to 1 "
+            "(default user), or pre-seed the users table via config.toml."
+        )
+    logger.info(
+        "identity override active: user_id=%d (%s)",
+        settings.user_id,
+        row["username"],
+        extra={
+            "override_user_id": settings.user_id,
+            "override_username": row["username"],
+        },
+    )
+    return settings.user_id
 
 
 @asynccontextmanager
@@ -108,14 +156,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 2. Seed the placeholder user row (idempotent).
     _seed_default_user(settings)
 
-    # 3. opencode client.
+    # 3. Load the user-identity TOML. Always present on app.state;
+    # missing config.toml → empty IdentityFile (default user only).
+    identity_file: IdentityFile = load_user_identity(settings.config_path)
+    app.state.user_identity = identity_file
+
+    # 4. Validate SCUFRIS_USER_ID override. Fails fast on misconfig.
+    app.state.identity_override = _validate_identity_override(settings)
+
+    # 5. opencode client.
     client = OpencodeClient(
         base_url=settings.opencode_url,
         password=settings.opencode_password,
     )
     app.state.opencode = client
 
-    # 4. Startup health probe — non-fatal.
+    # 6. Startup health probe — non-fatal.
     health: HealthResponse | None = None
     try:
         health = await asyncio.wait_for(client.health(), timeout=HEALTH_PROBE_TIMEOUT_S)
@@ -135,7 +191,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             exc,
         )
 
-    # 5. Default-model probe — only when opencode is up. Skip when
+    # 7. Default-model probe — only when opencode is up. Skip when
     # health failed; we'd just hit the same wall again. Cache stays
     # None, so /v1/chat will 503 until opencode comes back.
     default_model: ModelRef | None = None

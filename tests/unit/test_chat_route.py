@@ -119,6 +119,17 @@ def _channel_payload(
     }
 
 
+def _write_config_toml(path: Path, body: str) -> Path:
+    """Write ``body`` to ``path`` with parents created. Returns ``path``.
+
+    Used by the #12 identity scenarios below to drive
+    ``Settings.config_path`` from a per-test fixture file.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
 # ---------------------------------------------------------------------------
 # Happy path — first call creates, second call reuses
 # ---------------------------------------------------------------------------
@@ -491,6 +502,200 @@ def test_chat_reuse_bumps_last_used_at(tmp_path: Path) -> None:
     assert row is not None
     assert row["created_at"] == 1, "created_at must not change on reuse"
     assert row["last_used_at"] > 1, "last_used_at must be bumped on reuse"
+
+
+# ---------------------------------------------------------------------------
+# Identity (#12) — TOML / override / default-fallback wiring through chat
+# ---------------------------------------------------------------------------
+
+
+def test_chat_binds_to_toml_user_when_surface_id_matches(tmp_path: Path) -> None:
+    """A request from ``(cli, alex)`` matching the TOML identity
+    mapping must persist a ``channels`` row keyed by the TOML user's
+    id (not 1) and materialise a binding row pointing at that id.
+    Verifies the ``resolve_user`` call wired in step 9 of #12 flows
+    through to the persistence layer."""
+    config = _write_config_toml(
+        tmp_path / "config.toml",
+        '[user]\n'
+        'username = "alex"\n'
+        '[user.identity]\n'
+        'cli = "alex"\n',
+    )
+    settings = Settings(
+        state_dir=tmp_path,
+        opencode_url=OPENCODE_TEST_URL,
+        config_path=config,
+    )
+    app = create_app(settings)
+
+    with respx.mock(base_url=settings.opencode_url, assert_all_called=False) as mock:
+        _mock_happy_boot(mock)
+        mock.post("/session").mock(
+            return_value=Response(200, json=_session_body("ses_alex"))
+        )
+        mock.post("/session/ses_alex/message").mock(
+            return_value=Response(
+                200, json=_assistant_body(msg_id="m_alex", session_id="ses_alex")
+            )
+        )
+        with TestClient(app) as client:
+            resp = client.post(
+                "/v1/chat",
+                json=_channel_payload(surface="cli", surface_id="alex"),
+            )
+
+    assert resp.status_code == 200
+
+    with connect(settings) as conn:
+        users = {
+            r["username"]: r["id"]
+            for r in conn.execute("SELECT id, username FROM users")
+        }
+        channel_row = conn.execute(
+            "SELECT user_id, surface, surface_id FROM channels"
+        ).fetchone()
+        bindings = list(
+            conn.execute(
+                "SELECT user_id, surface, surface_id FROM surface_bindings"
+            )
+        )
+
+    # Both default and the TOML user exist; alex is not user 1.
+    assert "alex" in users
+    alex_id = users["alex"]
+    assert alex_id != 1
+
+    # channels row keyed by alex.
+    assert channel_row is not None
+    assert channel_row["user_id"] == alex_id
+
+    # Binding materialised exactly once for the TOML hit.
+    assert len(bindings) == 1
+    assert (
+        bindings[0]["user_id"],
+        bindings[0]["surface"],
+        bindings[0]["surface_id"],
+    ) == (alex_id, "cli", "alex")
+
+
+def test_chat_with_identity_override_pins_user_id_and_skips_binding(
+    tmp_path: Path,
+) -> None:
+    """``Settings(user_id=1)`` is the server-side override (D4). Even
+    when the request matches a TOML identity that *would* route to a
+    different user, chat must persist ``channels.user_id=1`` and
+    write **no** ``surface_bindings`` row — the override is a
+    deliberate detour around the binding table."""
+    config = _write_config_toml(
+        tmp_path / "config.toml",
+        '[user]\n'
+        'username = "alex"\n'
+        '[user.identity]\n'
+        'cli = "alex"\n',
+    )
+    settings = Settings(
+        state_dir=tmp_path,
+        opencode_url=OPENCODE_TEST_URL,
+        config_path=config,
+        user_id=1,
+    )
+    app = create_app(settings)
+
+    with respx.mock(base_url=settings.opencode_url, assert_all_called=False) as mock:
+        _mock_happy_boot(mock)
+        mock.post("/session").mock(
+            return_value=Response(200, json=_session_body("ses_o"))
+        )
+        mock.post("/session/ses_o/message").mock(
+            return_value=Response(
+                200, json=_assistant_body(msg_id="m_o", session_id="ses_o")
+            )
+        )
+        with TestClient(app) as client:
+            # Request mirrors the TOML identity entry; override must
+            # still dominate.
+            resp = client.post(
+                "/v1/chat",
+                json=_channel_payload(surface="cli", surface_id="alex"),
+            )
+
+    assert resp.status_code == 200
+
+    with connect(settings) as conn:
+        channel_row = conn.execute("SELECT user_id FROM channels").fetchone()
+        n_bindings = conn.execute(
+            "SELECT COUNT(*) AS n FROM surface_bindings"
+        ).fetchone()["n"]
+        usernames = {
+            r["username"] for r in conn.execute("SELECT username FROM users")
+        }
+
+    assert channel_row is not None
+    assert channel_row["user_id"] == 1
+    # Override path skips materialisation.
+    assert n_bindings == 0
+    # The TOML user was never auto-created either — override
+    # short-circuits before _ensure_user_row runs.
+    assert usernames == {"default"}
+
+
+def test_chat_default_fallback_writes_binding_then_reuses_it(
+    tmp_path: Path,
+) -> None:
+    """Two chats from the same unknown ``(surface, surface_id)`` pair
+    must hit the binding cache the second time. After both calls
+    there should be exactly one ``surface_bindings`` row keyed at
+    ``user_id=1`` and one ``channels`` row reused across both
+    turns."""
+    settings = _make_settings(tmp_path)  # no TOML, no override
+    app = create_app(settings)
+
+    with respx.mock(base_url=settings.opencode_url, assert_all_called=False) as mock:
+        _mock_happy_boot(mock)
+        create_route = mock.post("/session").mock(
+            return_value=Response(200, json=_session_body("ses_d"))
+        )
+        mock.post("/session/ses_d/message").mock(
+            return_value=Response(
+                200, json=_assistant_body(msg_id="m_d", session_id="ses_d")
+            )
+        )
+        with TestClient(app) as client:
+            r1 = client.post(
+                "/v1/chat",
+                json=_channel_payload(surface="cli", surface_id="term-x"),
+            )
+            r2 = client.post(
+                "/v1/chat",
+                json=_channel_payload(surface="cli", surface_id="term-x"),
+            )
+
+    assert r1.status_code == 200
+    assert r2.status_code == 200
+
+    # Channel reused → only one create_session call.
+    assert create_route.call_count == 1
+
+    with connect(settings) as conn:
+        bindings = list(
+            conn.execute(
+                "SELECT user_id, surface, surface_id FROM surface_bindings"
+            )
+        )
+        n_channels = conn.execute(
+            "SELECT COUNT(*) AS n FROM channels"
+        ).fetchone()["n"]
+
+    # Binding materialised once on first call; cache hit on second.
+    assert len(bindings) == 1
+    assert (
+        bindings[0]["user_id"],
+        bindings[0]["surface"],
+        bindings[0]["surface_id"],
+    ) == (1, "cli", "term-x")
+    # Same channel reused too.
+    assert n_channels == 1
 
 
 # ---------------------------------------------------------------------------

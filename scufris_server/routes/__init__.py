@@ -7,13 +7,12 @@ appended to :data:`ROUTERS` here. The app factory
 calls ``include_router`` on each.
 
 Step 7 added healthz/version; step 8 added chat; step 10 lands
-placeholder modules for the rest.
+placeholder modules for the rest. #12 promotes the identity module
+from placeholder to real, mounting ``POST /v1/identity/resolve``.
 
 Placeholder routers (defined but not yet mounted; future tasks register
 real routes and append to :data:`ROUTERS` themselves):
 
-- :mod:`scufris_server.routes.identity`    — task #12
-  (``tasks/20260613-091046``).
 - :mod:`scufris_server.routes.sessions`    — task #10
   (``tasks/20260613-091044``).
 - :mod:`scufris_server.routes.stats`       — task #13
@@ -31,8 +30,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from scufris_server.routes import identity, permissions, sessions, stats  # noqa: F401
+from scufris_server.routes import permissions, sessions, stats  # noqa: F401
 from scufris_server.routes.chat import router as chat_router
 from scufris_server.routes.health import router as health_router
+from scufris_server.routes.identity import router as identity_router
 
-ROUTERS: list[APIRouter] = [health_router, chat_router]
+ROUTERS: list[APIRouter] = [health_router, identity_router, chat_router]

@@ -1,24 +1,103 @@
-"""Placeholder router for the identity HTTP layer (task #12 —
-``tasks/20260613-091046``: "Identity layer + XDG user config").
+"""HTTP layer for the identity resolution module (#12).
 
-This module exists so dependent tasks can import
-``scufris_server.routes.identity`` without ``ImportError`` and so the
-file structure laid out in #9's design is in place.
+Single endpoint: ``POST /v1/identity/resolve``. Body ``{surface,
+surface_id}``; response :class:`scufris_server.identity.ResolvedUser`.
 
-The router is empty (no routes registered). Task #12 will populate it
-with at least ``POST /v1/identity/resolve``. Until then, any request
-under this prefix will 404 — Starlette's default behaviour for an
-unmatched path. We deliberately don't register a catch-all 501, since
-that would shadow the real routes #12 adds.
+The route is an *almost*-direct passthrough to
+:func:`scufris_server.identity.resolve_user`. All real logic — TOML
+lookup, override handling, surface_bindings materialisation — lives
+in the pure-Python ``identity`` module. This module just:
 
-When #12 lands it should:
+1. Validates the request body (surface + surface_id non-empty).
+2. Plumbs in the request-scoped DB connection plus the lifespan-
+   cached ``IdentityFile`` and override.
+3. Logs the resolution at INFO with the request_id so operators
+   can correlate against the chat call that triggered it.
 
-1. Add concrete routes to the ``router`` defined here.
-2. Append ``router`` to ``ROUTERS`` in :mod:`scufris_server.routes`.
+The endpoint is unauthenticated for v0 — `/v1/*` is loopback-only
+until #14 lands a bearer-token gate.
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+import logging
+import sqlite3
+from typing import Annotated
+
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel, Field
+
+from scufris_server.dependencies import (
+    get_db_conn,
+    get_identity_override,
+    get_user_identity,
+)
+from scufris_server.identity import IdentityFile, ResolvedUser, resolve_user
 
 router = APIRouter(prefix="/v1/identity", tags=["identity"])
+logger = logging.getLogger("scufris_server.routes.identity")
+
+
+class ResolveRequest(BaseModel):
+    """Body of ``POST /v1/identity/resolve``.
+
+    Fields match design doc §9 line 291. Both are required, both
+    non-empty — empty surface_id has no meaningful interpretation
+    (would bind every empty-id caller to the same row), so reject
+    at the validation layer.
+    """
+
+    surface: str = Field(
+        ..., min_length=1, description="cli | telegram | web | ..."
+    )
+    surface_id: str = Field(
+        ...,
+        min_length=1,
+        description="Per-surface user identifier (terminal user, "
+        "telegram chat_id, web tab id, ...).",
+    )
+
+
+@router.post("/resolve", response_model=ResolvedUser)
+async def resolve(
+    payload: ResolveRequest,
+    conn: Annotated[sqlite3.Connection, Depends(get_db_conn)],
+    identity_file: Annotated[IdentityFile, Depends(get_user_identity)],
+    override: Annotated[int | None, Depends(get_identity_override)],
+) -> ResolvedUser:
+    """Resolve ``(surface, surface_id)`` to a :class:`ResolvedUser`.
+
+    Materialises ``users`` + ``surface_bindings`` rows on first
+    contact (TOML hit or default fallback). See
+    :func:`scufris_server.identity.resolve_user` for the algorithm.
+
+    Errors
+    ------
+    - 422 (FastAPI default): empty surface or surface_id.
+    - 500: ``RuntimeError`` from the identity module bubbles up;
+      indicates a mis-seeded DB (default user missing) or a stale
+      ``SCUFRIS_USER_ID`` env var pointing at a non-existent user.
+      We don't catch these — they're operator-visible bugs.
+    """
+    resolved = resolve_user(
+        conn,
+        payload.surface,
+        payload.surface_id,
+        identity_file,
+        override_user_id=override,
+    )
+    logger.info(
+        "identity resolve: user_id=%d (%s) for (%s, %s)",
+        resolved.user_id,
+        resolved.username,
+        resolved.surface,
+        resolved.surface_id,
+        extra={
+            "user_id": resolved.user_id,
+            "username": resolved.username,
+            "surface": resolved.surface,
+            "surface_id": resolved.surface_id,
+            "override_active": override is not None,
+        },
+    )
+    return resolved

@@ -12,6 +12,12 @@ asserts the minimal contract dependent tasks can rely on:
 If a future task forgets to remove the empty-router assertion when it
 adds real routes, that's a deliberate trip-wire telling them to also
 update :data:`scufris_server.routes.ROUTERS`.
+
+#12 (``20260613-091046``) promoted ``scufris_server.identity`` and
+``scufris_server.routes.identity`` from placeholders to real
+implementations; their cases were dropped from the parametrize lists
+below. The remaining placeholders still belong to their owning
+tasks.
 """
 
 from __future__ import annotations
@@ -23,7 +29,6 @@ from fastapi import APIRouter
 
 # (module, owning_task_id, expected_router_prefix or None)
 HTTP_PLACEHOLDERS: list[tuple[str, str, str]] = [
-    ("scufris_server.routes.identity", "20260613-091046", "/v1/identity"),
     ("scufris_server.routes.sessions", "20260613-091044", "/v1/sessions"),
     ("scufris_server.routes.stats", "20260613-091047", "/v1/stats"),
     ("scufris_server.routes.permissions", "20260613-093108", "/v1/permissions"),
@@ -32,7 +37,6 @@ HTTP_PLACEHOLDERS: list[tuple[str, str, str]] = [
 NON_HTTP_PLACEHOLDERS: list[tuple[str, str]] = [
     ("scufris_server.events", "20260613-091045"),
     ("scufris_server.internal", "20260613-093857"),
-    ("scufris_server.identity", "20260613-091046"),
 ]
 
 
@@ -96,16 +100,20 @@ def test_routes_init_imports_placeholders() -> None:
     import scufris_server.routes as routes_pkg
 
     # Placeholders should be reachable via the package namespace
-    # (we did ``from scufris_server.routes import identity, ...``).
-    for attr in ("identity", "sessions", "stats", "permissions"):
+    # (we did ``from scufris_server.routes import sessions, ...``).
+    # ``identity`` was promoted to real and is mounted; the
+    # remaining placeholders still need to import cleanly.
+    for attr in ("sessions", "stats", "permissions"):
         assert hasattr(routes_pkg, attr), (
             f"scufris_server.routes.{attr} not imported by routes/__init__.py"
         )
 
-    # ROUTERS still only has health + chat — placeholders are *not*
-    # mounted by step 10.
+    # ROUTERS now has health + identity (real, post-#12) + chat = 3.
+    # The other placeholders are *not* mounted yet — their owning
+    # tasks will append themselves.
     from scufris_server.routes import ROUTERS
 
-    assert len(ROUTERS) == 2, (
-        f"step 10 must not auto-mount placeholders; ROUTERS has {len(ROUTERS)} entries"
+    assert len(ROUTERS) == 3, (
+        f"expected 3 mounted routers (health, identity, chat); "
+        f"ROUTERS has {len(ROUTERS)} entries"
     )

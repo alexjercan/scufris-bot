@@ -5,10 +5,14 @@ that blocks until opencode returns the assistant's full reply. SSE /
 streaming variants are deferred to #11; tool-call surfacing and
 permissions live in #30.
 
-Identity is hard-coded (``user_id = 1``) for v0 — real surface →
-user resolution lands in #12. Channels and session_links are still
-keyed by ``(user_id, surface, surface_id, agent)`` so that wiring is
-already in place when #12 ships.
+Identity resolution (#12) runs once per request before session
+lookup: :func:`scufris_server.identity.resolve_user` consults the
+``SCUFRIS_USER_ID`` override, the existing ``surface_bindings``
+cache, the loaded ``config.toml``, and finally the seeded default
+user — in that order. The resolved ``user_id`` is what
+``channels`` rows are keyed by, so chat sessions for the same
+``(surface, surface_id, agent)`` triple stay pinned to the right
+user across surfaces and restarts.
 
 Error policy
 ------------
@@ -34,7 +38,13 @@ from typing import Annotated, Literal, NoReturn
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from scufris_server.dependencies import get_db_conn, get_opencode_client
+from scufris_server.dependencies import (
+    get_db_conn,
+    get_identity_override,
+    get_opencode_client,
+    get_user_identity,
+)
+from scufris_server.identity import IdentityFile, resolve_user
 from scufris_server.opencode_client import (
     OpencodeClient,
     OpencodeNetworkError,
@@ -45,9 +55,6 @@ from scufris_server.opencode_client import (
 
 router = APIRouter(prefix="/v1", tags=["chat"])
 logger = logging.getLogger(__name__)
-
-# Hard-coded for v0; real identity resolution is #12.
-DEFAULT_USER_ID = 1
 
 
 # ---------------------------------------------------------------------------
@@ -182,18 +189,23 @@ async def chat(
     request: Request,
     client: Annotated[OpencodeClient, Depends(get_opencode_client)],
     conn: Annotated[sqlite3.Connection, Depends(get_db_conn)],
+    identity_file: Annotated[IdentityFile, Depends(get_user_identity)],
+    override: Annotated[int | None, Depends(get_identity_override)],
 ) -> ChatResponse:
     """Synchronously route a user message through opencode and return the reply.
 
-    Algorithm (design §9.1):
+    Algorithm (design §9.1, with #12 identity carryover):
 
     1. Verify a default model is cached. If not → 503.
-    2. Look up an existing opencode session for ``(user_id, channel)``.
-    3. If none, ask opencode to ``create_session`` and persist channel
+    2. Resolve the request's ``(surface, surface_id)`` to a user
+       (TOML, override, or default fallback). Materialises a
+       ``surface_bindings`` row on first contact.
+    3. Look up an existing opencode session for ``(user_id, channel)``.
+    4. If none, ask opencode to ``create_session`` and persist channel
        + session link rows.
-    4. Send the user's message via ``send_message``; the call blocks
+    5. Send the user's message via ``send_message``; the call blocks
        until opencode finishes the turn (tool calls included).
-    5. Return reply text + the metadata the design exposes.
+    6. Return reply text + the metadata the design exposes.
     """
     default_model = request.app.state.opencode_default_model
     if default_model is None:
@@ -206,7 +218,17 @@ async def chat(
             "opencode has no connected provider with a default model",
         )
 
-    user_id = DEFAULT_USER_ID
+    # Identity resolution (#12). Always returns a populated
+    # ResolvedUser; raises only on mis-seeded DB state, which would
+    # be a 500 (operator-visible bug).
+    resolved = resolve_user(
+        conn,
+        payload.channel.surface,
+        payload.channel.surface_id,
+        identity_file,
+        override_user_id=override,
+    )
+    user_id = resolved.user_id
     oc_session_id = _resolve_session(conn, user_id, payload.channel)
 
     if oc_session_id is None:
