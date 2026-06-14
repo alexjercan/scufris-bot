@@ -1,6 +1,6 @@
 # scufris-server v2: HTTP daemon wrapping opencode serve
 
-- STATUS: OPEN
+- STATUS: DONE
 - PRIORITY: 90
 - TAGS: server,deploy,opencode
 
@@ -229,14 +229,14 @@ Each item is small enough to land in one commit and be reviewed independently.
          - opencode 503 → 503 from `/v1/chat` with a structured error.
 
 9. **Integration test against real opencode + ollama.**
-   - [ ] `tests/integration/conftest.py` provides:
+   - [x] `tests/integration/conftest.py` provides:
          - A fixture that requires `OPENCODE_URL` (default
            `http://127.0.0.1:4096`) reachable; `pytest.skip()` if not.
          - A fixture that requires the configured model (default
            `ollama/qwen3:latest`) to appear in `GET /provider`'s
            connected providers; skip otherwise.
          - A fresh SQLite tmp dir per test run.
-   - [ ] `tests/integration/test_chat_real.py` exercises one full pass:
+   - [x] `tests/integration/test_chat_real.py` exercises one full pass:
          - Boot `scufris_server` via the test client.
          - `POST /v1/chat` with a tiny prompt that doesn't need tools
            (e.g. system prompt restricting to a one-word reply).
@@ -244,24 +244,24 @@ Each item is small enough to land in one commit and be reviewed independently.
            `tokens.input + tokens.output > 0`.
          - Send a follow-up to the same channel; assert the
            `oc_session_id` is identical (session reuse).
-   - [ ] Mark with `@pytest.mark.integration`. `pyproject.toml`
+   - [x] Mark with `@pytest.mark.integration`. `pyproject.toml`
          registers the marker.
-   - [ ] Document in README how to run integration tests
+   - [x] Document in README how to run integration tests
          (prerequisites: ollama up with qwen3 pulled, `opencode serve`
          on default port).
 
 10. **Placeholder routers.**
-   - [ ] `identity.py`, `sessions.py`, `stats.py`, `permissions.py`,
-         `internal/__init__.py`, `events.py` exist as empty modules
-         (or with a single `router` that 501s on every path) so the
-         dependent tasks have a place to land.
-   - [ ] Each carries a docstring naming the owning task ID.
+    - [x] `identity.py`, `sessions.py`, `stats.py`, `permissions.py`,
+          `internal/__init__.py`, `events.py` exist as empty modules
+          (or with a single `router` that 501s on every path) so the
+          dependent tasks have a place to land.
+    - [x] Each carries a docstring naming the owning task ID.
 
 11. **README / quickstart.**
-    - [ ] Top-level `README.md` (or `docs/server.md`) section: how to
+    - [x] Top-level `README.md` (or `docs/server.md`) section: how to
           run `opencode serve` + `scufris-server` locally; how to
           curl `/v1/healthz` and `/v1/chat`.
-    - [ ] Separate "Running integration tests" section: ollama
+    - [x] Separate "Running integration tests" section: ollama
           prerequisites, `pytest -m integration` invocation, expected
           runtime (single-digit seconds against qwen3:latest on a
           reasonable local model).
@@ -278,13 +278,13 @@ Each item is small enough to land in one commit and be reviewed independently.
 - [x] Subsequent requests to the same `(surface, surface_id, agent)`
       tuple reuse the same opencode session (verified in DB and via
       `info.parentID` chain).
-- [ ] `pytest tests/unit/` is green offline (no opencode, no ollama).
-- [ ] `pytest -m integration` is green when run with
+- [x] `pytest tests/unit/` is green offline (no opencode, no ollama).
+- [x] `pytest -m integration` is green when run with
       `opencode serve` + `ollama` (`qwen3:latest`) on default ports.
       Single integration test passes in <30s.
-- [ ] No lint errors with `ruff check`. Type-check clean with
+- [x] No lint errors with `ruff check`. Type-check clean with
       `mypy --strict scufris_server`.
-- [ ] All placeholder modules referenced by dependent tasks
+- [x] All placeholder modules referenced by dependent tasks
       (#10–#13, #28, #30, #32) exist and import without error.
 
 ---
@@ -311,12 +311,24 @@ Each item is small enough to land in one commit and be reviewed independently.
    queue? Pick during step 3 and document the choice. Prior art:
    FastAPI docs recommend per-request for safety. Single-writer
    semantics aren't a problem at this scale.
+   - **Resolved (step 8):** per-request via the `get_db_conn` async
+     generator in `scufris_server/dependencies.py`. Async (not sync)
+     so the connection stays on the event-loop thread alongside the
+     async handler — SQLite is thread-pinned. Open cost is microseconds,
+     so the event-loop block is negligible.
 2. **`uv` vs. `pip` for v0.** Planning notes lean `uv`. Confirm
    during step 1 — minor decision but locks the lockfile format.
+   - **Resolved (step 1):** `uv` with `uv.lock` committed.
+     Devshell uses `uv2nix` (so `UV_NO_SYNC=1`); use
+     `uv run --active` to target the nix venv.
 3. **Should `/v1/chat` accept multipart parts** (text + file) **in this
    task, or text-only?** Design §9.1 supports the full Part union but
    v0 only needs text. Recommend text-only here; broaden when a
    real client needs it. Confirm during step 8.
+   - **Resolved (step 8):** text-only. `ChatRequest.message: str` with
+     `min_length=1`. Broadening to multipart parts is deferred until a
+     real client asks for it; file a fresh task at that point rather
+     than carrying the surface area now.
 
 These are deliberately *small* decisions left to implementation.
 None block starting the task.

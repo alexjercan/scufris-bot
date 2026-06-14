@@ -18,6 +18,7 @@ failure, and cleans up after itself. Run from the repo root.
 | `check_opencode_health.py` | Hit `GET /global/health` via `OpencodeClient`.                   |     **yes**     |
 | `check_boot.py`            | Spawn `python -m scufris_server`; fetch `/openapi.json`.         |    optional     |
 | `check_request.py`         | Boot the server; call `/v1/healthz` + `/v1/version`; show ids.   |    optional     |
+| `check_chat.py`            | Boot the server; POST `/v1/chat` 3× to verify session reuse.     |     **yes**     |
 
 ## Quick start
 
@@ -29,6 +30,7 @@ python examples/check_settings.py
 python examples/check_opencode_health.py    # requires `opencode serve` running
 python examples/check_boot.py
 python examples/check_request.py
+python examples/check_chat.py                # requires opencode + a connected provider
 ```
 
 `check_boot.py` boots the server on an auto-picked free port (passed

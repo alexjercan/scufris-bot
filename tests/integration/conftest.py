@@ -51,9 +51,7 @@ def opencode_url() -> str:
         pytest.skip(f"opencode unreachable at {url}: {exc}")
 
     if resp.status_code != 200:
-        pytest.skip(
-            f"opencode at {url} returned {resp.status_code} (expected 200)"
-        )
+        pytest.skip(f"opencode at {url} returned {resp.status_code} (expected 200)")
 
     try:
         body: dict[str, Any] = resp.json()
