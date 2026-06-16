@@ -1,6 +1,6 @@
 # scufris-server v2: HTTP daemon wrapping opencode serve
 
-- STATUS: DONE
+- STATUS: CLOSED
 - PRIORITY: 90
 - TAGS: server,deploy,opencode
 

@@ -156,7 +156,7 @@ CREATE TABLE channels (
 
 | Column | Type | Constraints | Meaning |
 |--------|------|-------------|---------|
-| `id` | INTEGER | PK | Channel identifier. Used by future endpoints (`/v1/sessions/:channel_id/fork`). |
+| `id` | INTEGER | PK | Channel identifier. Used by `/v1/sessions/{channel_id}/clear` and (future, `#33`) `/v1/sessions/{channel_id}/fork`. |
 | `user_id` | INTEGER | NOT NULL, FK | Who's on this channel. |
 | `surface` | TEXT | NOT NULL | Same vocabulary as `surface_bindings`. |
 | `surface_id` | TEXT | NOT NULL | The per-surface user id for the channel. |
@@ -172,8 +172,11 @@ Different `agent` under the same `(user_id, surface, surface_id)`
 means a new channel — the build agent and the plan agent don't share
 context.
 
-Inserted by `chat._record_new_session()` (`routes/chat.py:138`) on the
-first chat for a new triple.
+Inserted by `sessions.create_channel_link()` (`sessions.py:175`) on
+the first chat for a new triple. Read by `sessions.list_user_channels`
+(GET `/v1/sessions`) and `sessions.get_channel`. Never updated;
+deletion happens only when the parent `users` row is deleted (which
+isn't supported today).
 
 ### `session_links`
 
@@ -196,10 +199,13 @@ CREATE TABLE session_links (
 The `channel_id` PK means a `channels` row has at most one
 `session_links` row. The 1:1 cardinality is enforced by the schema.
 
-Inserted by `chat._record_new_session()` alongside the `channels`
-row, in one transaction. Updated by `chat._touch_session()`
-(`routes/chat.py:161`) on reuse. Will be deleted by the (future)
-`/v1/sessions/:channel_id/clear` endpoint and `/v1/clear`.
+Inserted by `sessions.create_channel_link()` (`sessions.py:175`)
+alongside the `channels` row, in one transaction. Updated by
+`chat._touch_session()` (`routes/chat.py:130`) on reuse. Deleted by
+`sessions.clear_channel_link()` and `sessions.clear_user_links()`,
+which back the live `POST /v1/sessions/{channel_id}/clear` and
+`POST /v1/clear` endpoints (`#10`,
+[`002_api_reference.md`](002_api_reference.md)).
 
 Note that *the opencode session itself* persists when a `session_links`
 row is deleted — only the *pointer* goes away. The session can be
@@ -335,8 +341,8 @@ Defined in `store.py`. Three things matter:
 - `with conn:` is the unit of atomicity. Commit on exit; rollback
   on exception.
 - Handlers can use multiple `with conn:` blocks per request — e.g.
-  the chat handler's `_record_new_session` and `_touch_session` are
-  separate atomic units.
+  the chat handler's `sessions.create_channel_link` and
+  `_touch_session` are separate atomic units.
 - `get_db_conn` does *not* wrap the whole request in a transaction.
   That would hold the writer lock across the slow `send_message`
   call to opencode.

@@ -5,16 +5,19 @@ explanation of every request and response.
 
 The headline:
 
-| Method | Path                            | Purpose                                            | Status |
-|--------|---------------------------------|----------------------------------------------------|--------|
-| GET    | `/v1/healthz`                   | Liveness probe + opencode reachability             | live   |
-| GET    | `/v1/version`                   | scufris version + cached opencode version          | live   |
-| POST   | `/v1/identity/resolve`          | Resolve `(surface, surface_id)` → user             | live   |
-| POST   | `/v1/chat`                      | Synchronous single-turn chat                       | live   |
-| —      | `/v1/sessions/*`                | Session listing / fork / clear                     | placeholder (#10) |
-| —      | `/v1/stats/*`                   | Per-user telemetry / clear                         | placeholder (#13) |
-| —      | `/v1/permissions/*`             | Permission reply for opencode tool calls           | placeholder (#30) |
-| —      | `/v1/chat/stream`               | SSE streaming chat                                 | not yet (#11)     |
+| Method | Path                              | Purpose                                            | Status |
+|--------|-----------------------------------|----------------------------------------------------|--------|
+| GET    | `/v1/healthz`                     | Liveness probe + opencode reachability             | live   |
+| GET    | `/v1/version`                     | scufris version + cached opencode version          | live   |
+| POST   | `/v1/identity/resolve`            | Resolve `(surface, surface_id)` → user             | live   |
+| POST   | `/v1/chat`                        | Synchronous single-turn chat                       | live   |
+| GET    | `/v1/sessions`                    | List a user's channels with enriched session info  | live   |
+| POST   | `/v1/sessions/{channel_id}/clear` | Drop the `session_links` row for one channel       | live   |
+| POST   | `/v1/clear`                       | Drop every `session_links` row for one user        | live   |
+| —      | `/v1/stats`                       | Per-user telemetry                                 | placeholder (#13) |
+| —      | `/v1/permissions/*`               | Permission reply for opencode tool calls           | placeholder (#30) |
+| —      | `/v1/chat/stream`                 | SSE streaming chat                                 | not yet (#11)     |
+| —      | `/v1/sessions/{channel_id}/fork`  | Fork a channel onto a new opencode session         | not yet (#33)     |
 
 Placeholders 404 today — the routers exist as empty `APIRouter`
 instances and aren't even mounted. They're imported by
@@ -395,6 +398,234 @@ curl -s -X POST http://127.0.0.1:7080/v1/chat \
 }
 ```
 
+## `GET /v1/sessions`
+
+Source: `routes/sessions.py:232`.
+
+List a user's channels with enriched session info pulled from
+opencode. One row per channel, sorted by
+`session_links.last_used_at` descending (most recently active first).
+
+The endpoint INNER-JOINs `channels` × `session_links`, so channels
+without a live link aren't returned today. ("List bound surfaces
+that have never chatted" is a separate question deferred to a
+future refinement; the immediate use case is "show me my live
+sessions so I can clear stale ones.")
+
+For each row, the handler asks opencode for the matching session
+metadata and splices in `title`, `tokens`, and `cost`. When opencode
+is unreachable (network error or 5xx), the same endpoint still
+returns 200 with the scufris-side fields populated and the
+opencode-supplied fields all `null`. A WARNING-level log record is
+emitted with the underlying error. This is the "degraded GET"
+contract (D1) — the channel list is critical enough to keep working
+when opencode is down.
+
+### Request
+
+No body. Query parameter:
+
+| Param | Type | Required | Meaning |
+|-------|------|----------|---------|
+| `user_id` | `int` | no | Caller-supplied principal. Ignored when `SCUFRIS_USER_ID` is set (override always wins, D2). Falls back to `1` (the seeded default user) if omitted and no override. |
+
+### Response
+
+```json
+[
+  {
+    "channel_id": 12,
+    "channel": {
+      "surface": "cli",
+      "surface_id": "alex",
+      "agent": "build"
+    },
+    "oc_session_id": "ses_abc123...",
+    "last_used_at": 1781609548,
+    "title": "Pong reply",
+    "tokens": {"input": 4096, "output": 213},
+    "cost": 0.0
+  }
+]
+```
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `channel_id` | `int` | Scufris-side `channels.id`. The argument to `/v1/sessions/{channel_id}/clear` and (future, `#33`) `/fork`. |
+| `channel` | `Channel` | The `(surface, surface_id, agent)` triple identifying this channel. Same shape as the `channel` field in `/v1/chat`. |
+| `oc_session_id` | `string` | Opencode session id (`ses_...`) bound to this channel. |
+| `last_used_at` | `int` | Unix seconds — last time this channel was touched by `/v1/chat`. The sort key. |
+| `title` | `string \| null` | Opencode's title for the session. Auto-generated by opencode after the first turn. `null` on the degraded path. |
+| `tokens` | `Tokens \| null` | Token counts from opencode's most recent message info — `{input, output}`. `null` on the degraded path. |
+| `cost` | `float \| null` | Per-session cost in USD. `0.0` for self-hosted models like local ollama. `null` on the degraded path. |
+
+Empty list (`[]`) is a valid response — user exists but has no live channels (newly seeded user, or post-`/v1/clear`). 404 is reserved for "user_id doesn't exist," so callers can distinguish "valid user, no sessions" from "wrong user."
+
+### Side effects
+
+- None on the database. The endpoint is read-only.
+- One `GET /session` call to opencode per request (or zero, if the user has no channels). Failure here is logged but not propagated.
+
+### Errors
+
+- **404** — `user_id` query parameter points at a `users.id` row that doesn't exist. (The override path skips this check by construction — the override is validated at boot.)
+- **422** — `user_id` is not a valid integer.
+
+### Examples
+
+```bash
+# Default user.
+curl -s http://127.0.0.1:7080/v1/sessions | jq
+
+# Specific user.
+curl -s 'http://127.0.0.1:7080/v1/sessions?user_id=2' | jq
+
+# Degraded — opencode is down. Same endpoint, partial data.
+curl -s http://127.0.0.1:7080/v1/sessions | jq '.[0]'
+# {
+#   "channel_id": 12,
+#   "channel": {...},
+#   "oc_session_id": "ses_...",
+#   "last_used_at": 1781609548,
+#   "title": null,
+#   "tokens": null,
+#   "cost": null
+# }
+```
+
+## `POST /v1/sessions/{channel_id}/clear`
+
+Source: `routes/sessions.py:295`.
+
+Drop the `session_links` row for one channel. The `channels` row
+itself stays — only the *pointer* to opencode's session is removed.
+The opencode session is **never** destroyed by this endpoint
+(ADR-13). The next `/v1/chat` to the same channel allocates a fresh
+opencode session.
+
+Idempotent on retry: clearing an already-cleared channel returns
+`{"cleared": false}` with HTTP 200. The handler queries `channels`
+directly (rather than going through `sessions.get_channel`, which
+INNER-JOINs `session_links`) so the post-clear state is still
+visible to the ownership check.
+
+### Request
+
+Path parameter:
+
+| Param | Type | Meaning |
+|-------|------|---------|
+| `channel_id` | `int` | The `channels.id` to clear. Source it from `GET /v1/sessions`. |
+
+No body. No query parameters — the principal is implicit:
+`SCUFRIS_USER_ID` override if set, otherwise the seeded default
+user (`DEFAULT_USER_ID = 1`). Ownership is verified against the
+channel row's `user_id`; a channel that exists but belongs to a
+different principal returns 404 (D2 — we don't leak channel
+existence to non-owners).
+
+### Response
+
+```json
+{"cleared": true}
+```
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `cleared` | `bool` | `true` when a `session_links` row was deleted. `false` on retry — channel exists, belongs to the resolved principal, but had no live link. |
+
+### Side effects
+
+- Deletes one `session_links` row (when `cleared=true`).
+- Leaves `channels` and the upstream opencode session intact.
+
+### Errors
+
+- **404** — channel doesn't exist *or* belongs to a different principal. The body is the same in both cases (`{"detail": "channel {N} not found"}`); the WARNING log line on the server distinguishes them for operators.
+
+### Examples
+
+```bash
+# Clear channel 12 for the default user.
+curl -s -X POST http://127.0.0.1:7080/v1/sessions/12/clear | jq
+# {"cleared": true}
+
+# Idempotent retry — same channel, no link left.
+curl -s -X POST http://127.0.0.1:7080/v1/sessions/12/clear | jq
+# {"cleared": false}
+
+# Channel doesn't exist, or belongs to another user — same 404 either way.
+curl -s -X POST http://127.0.0.1:7080/v1/sessions/9999/clear -i | head -1
+# HTTP/1.1 404 Not Found
+```
+
+## `POST /v1/clear`
+
+Source: `routes/sessions.py:367`.
+
+Drop every `session_links` row for one user, in a single
+transaction. The user's `channels` rows survive — only the pointers
+go. As with the per-channel endpoint, opencode-side sessions are
+**never** destroyed (ADR-13).
+
+The bulk variant of `/v1/sessions/{channel_id}/clear`. Idempotent —
+clearing a user with no live links returns `{"count": 0}` with HTTP
+200, not a 404.
+
+### Request
+
+```json
+{"user_id": 1}
+```
+
+| Field | Type | Required | Meaning |
+|-------|------|----------|---------|
+| `user_id` | `int` (≥ 1) | yes | The user whose `session_links` to drop. If `SCUFRIS_USER_ID` is set, this body field is silently ignored — the override always wins (D2). Operators running pinned can't accidentally clear another user from a stray curl. |
+
+No query parameters.
+
+### Response
+
+```json
+{"count": 1}
+```
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `count` | `int` | Number of `session_links` rows deleted. `0` on a no-op clear (user exists, no live links — this is success, not 404). |
+
+### Side effects
+
+- Deletes zero or more `session_links` rows in one transaction.
+- Leaves `channels` and upstream opencode sessions intact.
+
+### Errors
+
+- **404** — `user_id` (after override resolution) points at a `users.id` row that doesn't exist.
+- **422** — body missing `user_id`, or `user_id < 1` (validated by `Field(..., ge=1)` on `BulkClearRequest`).
+
+### Examples
+
+```bash
+# Clear all live channels for user 1.
+curl -s -X POST http://127.0.0.1:7080/v1/clear \
+  -H 'content-type: application/json' \
+  -d '{"user_id": 1}' | jq
+# {"count": 3}
+
+# Idempotent retry.
+curl -s -X POST http://127.0.0.1:7080/v1/clear \
+  -H 'content-type: application/json' \
+  -d '{"user_id": 1}' | jq
+# {"count": 0}
+
+# Unknown user.
+curl -s -X POST http://127.0.0.1:7080/v1/clear \
+  -H 'content-type: application/json' \
+  -d '{"user_id": 9999}' -i | head -1
+# HTTP/1.1 404 Not Found
+```
+
 ## Placeholder routers
 
 The following routers exist as empty `APIRouter` instances. They are
@@ -409,12 +640,17 @@ When the owning task lands, two things have to happen:
 
 | Module | Owning task | Planned endpoints |
 |--------|-------------|-------------------|
-| `routes/sessions.py`    | `#10` (`tasks/20260613-091044`) | `GET /v1/sessions`, `POST /v1/sessions/:channel_id/fork`, `POST /v1/sessions/:channel_id/clear` |
-| `routes/stats.py`       | `#13` (`tasks/20260613-091047`) | `GET /v1/stats`, `POST /v1/clear` |
+| `routes/stats.py`       | `#13` (`tasks/20260613-091047`) | `GET /v1/stats` |
 | `routes/permissions.py` | `#30` (`tasks/20260613-093108`) | `POST /v1/permissions/:perm_id/reply` |
 
 The shapes are documented in `tasks/20260613-091036/TASK.md` §8 (the
 public-API table). Today, requests under those prefixes return 404.
+
+`routes/sessions.py` was a placeholder until `#10` shipped (now lives
+above as `GET /v1/sessions`, `POST /v1/sessions/{channel_id}/clear`,
+and `POST /v1/clear`). `#13`'s planned `/v1/clear` was promoted out
+of the stats router and lives on the dedicated `clear_router` in
+`scufris_server/routes/sessions.py`.
 
 ## Future endpoints (not yet wired)
 
@@ -422,6 +658,21 @@ public-API table). Today, requests under those prefixes return 404.
   shape, response is a stream of `ThinkingEvent`-shaped chunks
   terminating in a `done` event. Owned by `#11`. Will live in
   `routes/chat.py` alongside the synchronous handler.
+
+- `POST /v1/sessions/{channel_id}/fork` — additive, git-branch-style
+  fork of an existing channel onto a new opencode session. Optional
+  `messageID` body field cuts at a specific message; otherwise forks
+  from the latest. Server-mints the fork's `surface_id` as
+  `parent.surface_id + "#" + new_oc_id[:8]` so the resulting child
+  channel has a stable, recognisable identity. Owned by `#33`
+  (`tasks/20260616-111428`). Will land on `sessions_router`.
+
+- `POST /v1/sessions/{channel_id}/expire` (or a parameterised
+  variant of `/clear`) — clear-with-server-side-expire that
+  additionally calls `DELETE /session/{id}` on opencode. Distinct
+  from today's `/clear` precisely because today's `/clear` upholds
+  ADR-13 and *never* destroys upstream sessions. Owned by `#34`
+  (`tasks/20260616-111430`). Shape and exact spelling still TBD.
 
 - Bearer-token auth gate — `#14` adds `SCUFRIS_TOKEN` checking on
   `/v1/*`. Will probably land as middleware rather than per-route

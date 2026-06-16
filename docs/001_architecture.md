@@ -191,7 +191,7 @@ client                middleware             chat handler             opencode  
   │                       │                                  │           │                    │
   │                       │     no cached session?                       │                    │
   │                       │       client.create_session() ──►│ POST /session                  │
-  │                       │       _record_new_session() ────────────────────────────────────► INSERT channels + session_links
+  │                       │       sessions.create_channel_link() ──────────────────────────► INSERT channels + session_links
   │                       │                                  │           │                    │
   │                       │     cached session?                          │                    │
   │                       │       _touch_session() ───────────────────────────────────────────► UPDATE session_links
@@ -228,8 +228,9 @@ client                middleware             chat handler             opencode  
 - **DB transaction policy.** Each `with conn:` block is one atomic
   unit. The handler does *not* wrap the entire request in a single
   transaction — that would hold the writer lock across the (slow)
-  `send_message` call. Instead, `_record_new_session` commits before
-  we send, and `_touch_session` is a separate one-statement commit.
+  `send_message` call. Instead, `sessions.create_channel_link` commits
+  before we send, and `_touch_session` is a separate one-statement
+  commit.
 
 - **Error handling is selective.** `OpencodeNetworkError` and
   `OpencodeServerError` (5xx from opencode) → 503 with structured body.

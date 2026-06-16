@@ -119,11 +119,45 @@ class TokenUsage(BaseModel):
     total: int | None = None
 
 
+class SessionTime(BaseModel):
+    """The ``time`` sub-object of an opencode :class:`Session`.
+
+    Opencode reports unix-millisecond timestamps for session lifecycle
+    events: ``created`` (always present), ``updated`` (always present),
+    and optionally ``compacting`` / ``archived`` (we ignore those —
+    ``model_config = extra="allow"`` keeps them queryable via
+    ``model_extra`` if a caller ever wants them).
+
+    Added as part of #10 to support ``GET /v1/sessions`` enrichment.
+    """
+
+    model_config = ConfigDict(extra="allow")
+    created: int
+    updated: int
+
+
 class Session(BaseModel):
-    """``POST /session`` response. Only ``id`` is required for our use."""
+    """``POST /session`` response (and the element type of
+    ``GET /session``).
+
+    ``id`` is the only field every code path requires — the chat
+    create-session call (#9 step 8) just needs it to wire the
+    ``session_links`` row. The remaining typed fields (``title``,
+    ``cost``, ``tokens``, ``time``) were added in #10 to power
+    ``GET /v1/sessions`` enrichment without dipping into
+    ``model_extra``. All are optional so the chat path's minimal
+    response bodies (and our own test fixtures) keep parsing.
+
+    Anything opencode emits that isn't typed here stays accessible
+    via ``model_extra`` (``extra="allow"``).
+    """
 
     model_config = ConfigDict(extra="allow")
     id: str
+    title: str | None = None
+    cost: float | None = None
+    tokens: TokenUsage | None = None
+    time: SessionTime | None = None
 
 
 class AssistantInfo(BaseModel):
@@ -333,6 +367,32 @@ class OpencodeClient:
             body["parentID"] = parent_id
         resp = await self._request("POST", "/session", json=body)
         return Session.model_validate(resp.json())
+
+    async def list_sessions(self) -> list[Session]:
+        """Fetch every session opencode currently knows about
+        (``GET /session``).
+
+        Returns the complete list. Opencode does not page or filter
+        server-side; on the live host we currently see ~50 entries
+        and the response is ~12KB, so a single round-trip is fine
+        for v0. Revisit if N grows past a few hundred.
+
+        Used by ``GET /v1/sessions`` (#10) to enrich each scufris-
+        tracked channel with opencode's authoritative
+        title/tokens/cost. The caller is responsible for
+        intersecting with our own ``session_links`` table —
+        sessions created out-of-band (TUI users, plugin code, other
+        clients) show up here but won't match any of our channels,
+        and that's by design (we only surface what we track).
+
+        Network errors and non-2xx responses propagate as
+        :class:`OpencodeNetworkError` / :class:`OpencodeServerError`.
+        The GET /v1/sessions route catches both and degrades to
+        nulls (see #10 D1).
+        """
+        resp = await self._request("GET", "/session")
+        raw = resp.json()
+        return [Session.model_validate(item) for item in raw]
 
     async def send_message(
         self,

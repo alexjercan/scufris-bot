@@ -55,6 +55,7 @@ scufris-bot/
 │   ├── app.py             # FastAPI factory + lifespan
 │   ├── config.py          # Settings (env-driven)
 │   ├── identity.py        # User resolver + TOML loader
+│   ├── sessions.py        # Channel ↔ opencode-session service layer
 │   ├── opencode_client.py # Async HTTP wrapper for opencode
 │   ├── store.py           # SQLite + migrations
 │   ├── logging.py         # JSON logging, request-id middleware
@@ -78,8 +79,8 @@ Two suites:
 
 | Suite | Command | What it runs | Network? |
 |-------|---------|--------------|----------|
-| Unit | `uv run --active pytest` (or just `uv run --active pytest -m "not integration"`) | Everything in `tests/unit/`. ~190+ tests. | No. opencode + ollama mocked via `respx`. |
-| Integration | `uv run --active pytest -m integration` | The single test in `tests/integration/test_chat_real.py`. | Yes. Needs live opencode + ollama with `qwen3:latest` pulled. |
+| Unit | `uv run --active pytest` (or just `uv run --active pytest -m "not integration"`) | Everything in `tests/unit/`. ~220 tests. | No. opencode + ollama mocked via `respx`. |
+| Integration | `uv run --active pytest -m integration` | Tests in `tests/integration/` (`test_chat_real.py`, `test_sessions_real.py`). | Yes. Needs live opencode + ollama with `qwen3:latest` pulled. |
 
 ### Unit tests
 
@@ -110,10 +111,16 @@ shape: write the test alongside the implementation, prefer
 
 ### Integration tests
 
-The integration test exercises the full `/v1/chat` round trip
-against live `opencode serve` + `ollama` with `qwen3:latest`. It
-self-skips if either is missing, so the suite stays green on CI
-where they aren't available.
+Integration tests exercise full round trips against live `opencode
+serve` + `ollama` with `qwen3:latest`. They self-skip if either is
+missing, so the suite stays green on CI where they aren't available.
+Today there are two:
+
+- `test_chat_real.py` — single-turn `/v1/chat` round trip.
+- `test_sessions_real.py` — seed two channels, list with enrichment,
+  clear one, list again, bulk clear, list again. Verifies the ADR-13
+  "scufris doesn't destroy upstream sessions" invariant by snapshotting
+  opencode's `GET /session` before and after each clear.
 
 Prerequisites:
 
@@ -129,9 +136,10 @@ Invocation:
 uv run --active pytest -m integration
 ```
 
-Expected runtime: 20–30 s on a warm cache; the first run after
-booting `ollama` can take 60+ s while the model loads. The test has
-a 90 s ceiling; anything past that fails.
+Expected runtime: 20–40 s for chat, 30–60 s for sessions on a warm
+cache; the first run after booting `ollama` can take longer while
+the model loads. Per-test ceilings: 90 s for chat, 120 s for
+sessions. Anything past those fails.
 
 To exclude integration tests explicitly (CI default):
 

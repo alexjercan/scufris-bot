@@ -52,6 +52,7 @@ from scufris_server.opencode_client import (
     SendMessageRequest,
     TextPartInput,
 )
+from scufris_server.sessions import Channel, create_channel_link
 
 router = APIRouter(prefix="/v1", tags=["chat"])
 logger = logging.getLogger(__name__)
@@ -60,21 +61,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Request / response models
 # ---------------------------------------------------------------------------
-
-
-class Channel(BaseModel):
-    """The conversational context a chat message belongs to.
-
-    The triple ``(surface, surface_id, agent)`` (plus ``user_id``) is
-    the primary key for opencode-session reuse: messages with the same
-    channel land in the same opencode session, and so share context.
-    """
-
-    surface: str = Field(..., min_length=1, description="cli | telegram | web | ...")
-    surface_id: str = Field(
-        ..., min_length=1, description="chat_id, terminal pid, web tab id"
-    )
-    agent: str = Field(..., min_length=1, description="which scufris agent persona")
 
 
 class ChatRequest(BaseModel):
@@ -124,6 +110,12 @@ def _resolve_session(
 
     Joins ``channels`` × ``session_links``. There's at most one match —
     the ``channels`` UNIQUE constraint guarantees it.
+
+    NB: this lookup is by ``(user_id, surface, surface_id, agent)`` —
+    the chat-arrival shape — and stays here because no other caller
+    needs that lookup form. :mod:`scufris_server.sessions` provides
+    only the ``channel_id``-keyed :func:`get_channel`, used by the
+    sessions routes (#10) and the future fork endpoint (#33).
     """
     row = conn.execute(
         "SELECT sl.oc_session_id "
@@ -133,29 +125,6 @@ def _resolve_session(
         (user_id, channel.surface, channel.surface_id, channel.agent),
     ).fetchone()
     return row["oc_session_id"] if row is not None else None
-
-
-def _record_new_session(
-    conn: sqlite3.Connection,
-    user_id: int,
-    channel: Channel,
-    oc_session_id: str,
-) -> None:
-    """Insert ``channels`` + ``session_links`` rows in one transaction."""
-    now = int(time.time())
-    with conn:
-        cursor = conn.execute(
-            "INSERT INTO channels (user_id, surface, surface_id, agent) "
-            "VALUES (?, ?, ?, ?)",
-            (user_id, channel.surface, channel.surface_id, channel.agent),
-        )
-        channel_id = cursor.lastrowid
-        conn.execute(
-            "INSERT INTO session_links "
-            "(channel_id, oc_session_id, created_at, last_used_at) "
-            "VALUES (?, ?, ?, ?)",
-            (channel_id, oc_session_id, now, now),
-        )
 
 
 def _touch_session(conn: sqlite3.Connection, oc_session_id: str) -> None:
@@ -255,7 +224,14 @@ async def chat(
             _raise_503("OpencodeServerError", str(exc))
 
         oc_session_id = session.id
-        _record_new_session(conn, user_id, payload.channel, oc_session_id)
+        create_channel_link(
+            conn,
+            user_id,
+            payload.channel.surface,
+            payload.channel.surface_id,
+            payload.channel.agent,
+            oc_session_id,
+        )
         logger.info(
             "chat: new opencode session created",
             extra={

@@ -6,15 +6,21 @@ appended to :data:`ROUTERS` here. The app factory
 (:func:`scufris_server.app.create_app`) iterates :data:`ROUTERS` and
 calls ``include_router`` on each.
 
-Step 7 added healthz/version; step 8 added chat; step 10 lands
-placeholder modules for the rest. #12 promotes the identity module
-from placeholder to real, mounting ``POST /v1/identity/resolve``.
+Step 7 added healthz/version; step 8 added chat. #12 promoted
+identity from placeholder to real (``POST /v1/identity/resolve``).
+#10 promoted sessions, mounting two routers:
 
-Placeholder routers (defined but not yet mounted; future tasks register
-real routes and append to :data:`ROUTERS` themselves):
+- ``sessions_router`` (prefix ``/v1/sessions``) — list +
+  per-channel clear.
+- ``clear_router`` (prefix ``/v1``) — bulk clear
+  (``POST /v1/clear``).
 
-- :mod:`scufris_server.routes.sessions`    — task #10
-  (``tasks/20260613-091044``).
+The two-router split is a deliberate choice (D4) — see the
+:mod:`scufris_server.routes.sessions` module docstring.
+
+Placeholder routers (defined but not yet mounted; future tasks
+register real routes and append to :data:`ROUTERS` themselves):
+
 - :mod:`scufris_server.routes.stats`       — task #13
   (``tasks/20260613-091047``).
 - :mod:`scufris_server.routes.permissions` — task #30
@@ -30,9 +36,16 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from scufris_server.routes import permissions, sessions, stats  # noqa: F401
+from scufris_server.routes import permissions, stats  # noqa: F401
 from scufris_server.routes.chat import router as chat_router
 from scufris_server.routes.health import router as health_router
 from scufris_server.routes.identity import router as identity_router
+from scufris_server.routes.sessions import clear_router, sessions_router
 
-ROUTERS: list[APIRouter] = [health_router, identity_router, chat_router]
+ROUTERS: list[APIRouter] = [
+    health_router,
+    identity_router,
+    chat_router,
+    sessions_router,
+    clear_router,
+]

@@ -1,6 +1,6 @@
 # Identity layer + XDG user config (config.toml)
 
-- STATUS: DONE
+- STATUS: CLOSED
 - PRIORITY: 75
 - TAGS: identity,config
 
