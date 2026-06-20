@@ -75,7 +75,9 @@ scufris_server/
 ├── opencode_client.py     # Async httpx wrapper for opencode HTTP API
 ├── store.py               # SQLite connection helpers + migrations
 ├── logging.py             # JsonFormatter + RequestIdMiddleware
-├── events.py              # Placeholder for SSE consumer (#11)
+├── events.py              # ThinkingEvent + per-process EventBus (#11)
+├── event_mapping.py       # Pure mapping of opencode events → ThinkingEvent (#11)
+├── sse.py                 # SSE wire framing + keepalive helper (#11)
 ├── internal/              # Reserved for plugin-only HTTP surface
 ├── migrations/
 │   └── 001_initial.sql    # Initial schema
@@ -84,7 +86,8 @@ scufris_server/
     ├── health.py          # /v1/healthz, /v1/version
     ├── identity.py        # /v1/identity/resolve  (#12)
     ├── chat.py            # /v1/chat
-    ├── sessions.py        # placeholder (#10)
+    ├── chat_stream.py     # /v1/chat/stream (#11)
+    ├── sessions.py        # /v1/sessions, /v1/sessions/{id}/clear, /v1/clear (#10)
     ├── stats.py           # placeholder (#13)
     └── permissions.py     # placeholder (#30)
 ```
@@ -100,7 +103,9 @@ scufris_server/
 | `opencode_client.py`| Typed async wrapper around opencode's HTTP API. Has its own exception hierarchy (`OpencodeNetworkError`, `OpencodeServerError`, etc.). |
 | `store.py`          | `connect()` context manager (used by lifespan + tests + `get_db_conn`); `apply_migrations()` (idempotent). Sets WAL + foreign-keys + autocommit=False per connection. |
 | `logging.py`        | One JSON object per log line. Per-request `request_id` propagated via `ContextVar`. Pure-ASGI middleware (avoids `BaseHTTPMiddleware` body buffering). |
-| `events.py`         | Empty stub for the SSE consumer in #11. |
+| `events.py`         | `ThinkingEvent` dataclass (wire shape for the streaming UX) + `EventBus`: a single long-lived `GET /event` consumer per scufris-server process (ADR-10). `subscribe(session_id)` hands out an in-memory queue per chat-stream handler. |
+| `event_mapping.py`  | Pure mapping module — converts opencode's `/event` payloads (`message.part.delta`, `message.part.updated`, `permission.updated`) into `ThinkingEvent`s. No FastAPI, no I/O — independently testable. |
+| `sse.py`            | Hand-rolled SSE wire framing (`format_event`, `format_keepalive`) plus `stream_with_keepalive`: a `shield`-based race wrapper that interleaves producer events with 15s idle keepalive comments. |
 | `internal/`         | Reserved for plugin-only endpoints (e.g. fact injection during compaction). Empty today. |
 | `migrations/`       | One `.sql` file per migration; applied in lex order; tracked by `_schema_migrations`. |
 | `routes/`           | One `APIRouter` per logical endpoint group. `routes/__init__.py` declares the `ROUTERS` list — only routers in that list are mounted. |
@@ -111,7 +116,7 @@ scufris_server/
 wraps the entire run. FastAPI calls it once at boot (yields control
 to handlers) and again at shutdown.
 
-The startup phase does nine things, in order:
+The startup phase does ten things, in order:
 
 1. **Apply migrations.** `store.apply_migrations()` walks
    `migrations/*.sql` in lex order and runs anything not in
@@ -148,13 +153,73 @@ The startup phase does nine things, in order:
    default model, caches as `app.state.opencode_default_model`. On
    miss → `/v1/chat` 503s with `error_type=DefaultModelMissing`.
 
-8. **Yield.** uvicorn starts accepting requests.
+8. **Start the SSE event bus.** Constructs `EventBus` against the
+   opencode client's underlying `httpx.AsyncClient`, spawns the
+   long-lived reader task, and caches the bus on
+   `app.state.opencode_event_bus`. The bus is started even on
+   degraded boot — its reader auto-reconnects with exponential
+   backoff (1s → 30s cap) so a missing-at-boot opencode that comes up
+   later doesn't require a scufris restart. See
+   [SSE event bus](#sse-event-bus) below.
 
-9. **Shutdown** (in the `finally` block): close the opencode client.
+9. **Yield.** uvicorn starts accepting requests.
+
+10. **Shutdown** (in the `finally` block): stop the event bus
+    *before* closing the opencode client, then close the client.
+    Order matters — the bus's reader task uses the client's
+    transport.
 
 Every cached attribute on `app.state` is set inside the lifespan, so
 handlers can read them via `request.app.state.X` knowing they're
 populated.
+
+## SSE event bus
+
+`scufris_server/events.py` implements the one-bus-per-process model
+prescribed by ADR-10. A single instance of `EventBus` is constructed
+in lifespan step 8 and cached on `app.state.opencode_event_bus`.
+Handlers that need to consume opencode events (today: just
+`/v1/chat/stream`) call `EventBus.subscribe(session_id)` to get an
+async-iterable queue of events scoped to that session.
+
+The bus owns:
+
+- **One long-lived `GET /event` SSE reader task**, regardless of how
+  many `/v1/chat/stream` handlers are live. N concurrent streams ⇒
+  1 upstream connection, not N (the "persistent consumer"
+  invariant from ADR-10).
+- **A reconnect loop with exponential backoff** — 1s initial delay,
+  doubling each failure, capped at 30s. Used both at startup (bus is
+  started even if opencode is down at boot) and mid-stream (if the
+  upstream connection drops).
+- **A per-session subscriber registry** — dictionary keyed by
+  opencode session id, value is the list of `asyncio.Queue` instances
+  registered by live handlers. The reader fans incoming events out to
+  the matching subscribers; events for sessions with no live
+  subscriber are dropped on the floor.
+
+Two error contracts exposed to handlers:
+
+- **`OpencodeUnavailable`** — raised by `subscribe()` if the bus has
+  never successfully connected to opencode `/event` within the
+  subscribe-timeout budget. This is the "bus never came up" failure
+  mode. The chat-stream handler surfaces it as a pre-stream 503 with
+  `error_type: "OpencodeUnavailable"`.
+
+- **`_BusReconnected` sentinel** — when the bus reconnects after a
+  drop (after at least one successful connection), it pushes a
+  `_BusReconnected` instance into every live subscriber queue. The
+  chat-stream handler treats receipt of this sentinel as a
+  mid-stream failure and emits an `error` SSE event with
+  `error_type: "BusReconnected"` (events that opencode emitted
+  during the gap are lost, so the turn can't be trusted to have
+  arrived intact). Replay-on-reconnect is §16.1 follow-up work.
+
+The bus is documented in detail in its module docstring; the
+mapping from opencode's wire events to `ThinkingEvent` lives in
+`event_mapping.py`. See
+[`002_api_reference.md` § POST /v1/chat/stream](002_api_reference.md#post-v1chatstream)
+for the events as they appear on the wire to clients.
 
 ## Request flow: `POST /v1/chat` end-to-end
 
@@ -281,13 +346,14 @@ microseconds per request — WAL-mode SQLite opens are very cheap.
 
 | Feature | Where it'll land |
 |---------|------------------|
-| SSE streaming chat | `#11` (`tasks/20260613-091045`). The `events.py` stub is the placeholder. |
-| Per-channel session listing / fork / clear | `#10` (`tasks/20260613-091044`). Stub in `routes/sessions.py`. |
+| Channel fork (`POST /v1/sessions/{id}/fork`) | `#33` (`tasks/20260616-111428`). Stub spot in `routes/sessions.py`. |
+| Channel server-side expire (`DELETE /session/{id}` on opencode) | `#34` (`tasks/20260616-111430`). Distinct from today's `clear`, which preserves the upstream session per ADR-13. |
 | Stats / per-user telemetry | `#13` (`tasks/20260613-091047`). Stub in `routes/stats.py`. |
 | Permissions UX | `#30` (`tasks/20260613-093108`). Stub in `routes/permissions.py`. |
 | In-tree opencode plugin | Future task. Touches `.opencode/plugin/scufris.ts`. |
 | Bearer-token auth on `/v1/*` | `#14` will land alongside the v2 CLI. |
 | Multi-tenant identity | Schema accommodates it (the `users` table is plural for a reason); UX/config doesn't. |
+| Replay-on-reconnect for the SSE event bus | Filed during `#11` close-out as the §16.1 follow-up; today a mid-stream upstream drop surfaces as an `error` SSE event with `error_type: "BusReconnected"`. |
 
 ## What's *not* part of scufris (ever)
 

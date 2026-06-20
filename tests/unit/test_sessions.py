@@ -149,6 +149,69 @@ def test_create_channel_link_inserts_channel_and_link_atomically(
     assert link_row["last_used_at"] == link_row["created_at"]
 
 
+def test_create_channel_link_relinks_orphan_channel_after_clear(
+    seeded_conn: sqlite3.Connection,
+) -> None:
+    """After a clear, a second create on the same channel tuple
+    reuses the existing ``channels.id`` instead of failing the
+    UNIQUE constraint.
+
+    Regression test for the orphan-channel bug surfaced by step 8
+    of #11 — a curl against an existing channel-after-clear would
+    hit ``sqlite3.IntegrityError: UNIQUE constraint failed:
+    channels.user_id, channels.surface, channels.surface_id,
+    channels.agent`` because the route always treated
+    ``_resolve_session → None`` as "first-ever chat". The fix
+    detects orphan ``channels`` rows in
+    :func:`create_channel_link` and INSERTs only the missing
+    ``session_links`` row.
+
+    Asserts: (1) the relink call succeeds; (2) the returned
+    ``channel_id`` equals the original; (3) the channels row was
+    *not* duplicated; (4) the new ``session_links`` row carries
+    the new ``oc_session_id`` (not the cleared one).
+    """
+    first = create_channel_link(
+        seeded_conn,
+        user_id=1,
+        surface="cli",
+        surface_id="alex",
+        agent="build",
+        oc_session_id="ses_original",
+    )
+    cleared = clear_channel_link(seeded_conn, first)
+    assert cleared is True
+
+    second = create_channel_link(
+        seeded_conn,
+        user_id=1,
+        surface="cli",
+        surface_id="alex",
+        agent="build",
+        oc_session_id="ses_fresh",
+    )
+
+    # Same channel id: relink, not a fresh row.
+    assert second == first
+
+    # Exactly one channels row for the tuple — UNIQUE held, no
+    # duplicate snuck in.
+    channel_count = seeded_conn.execute(
+        "SELECT COUNT(*) AS n FROM channels "
+        "WHERE user_id=? AND surface=? AND surface_id=? AND agent=?",
+        (1, "cli", "alex", "build"),
+    ).fetchone()
+    assert channel_count["n"] == 1
+
+    # The link points at the *new* oc_session_id, not the cleared one.
+    link_row = seeded_conn.execute(
+        "SELECT oc_session_id FROM session_links WHERE channel_id = ?",
+        (second,),
+    ).fetchone()
+    assert link_row is not None
+    assert link_row["oc_session_id"] == "ses_fresh"
+
+
 # ---------------------------------------------------------------------------
 # get_channel
 # ---------------------------------------------------------------------------

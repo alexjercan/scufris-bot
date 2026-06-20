@@ -69,7 +69,7 @@ What lives here vs. what lives in opencode:
 | Identity (`users`, `surface_bindings`) | scufris |
 | Channel ↔ session pointers (`channels`, `session_links`) | scufris |
 | Per-user durable facts | scufris (table exists; tooling in `#19`) |
-| Audit log of opencode events | scufris (table exists; consumer in `#11`) |
+| Audit log of opencode events | scufris (table exists; no writer today) |
 
 We deliberately don't persist conversation content. opencode owns
 that; we own *pointers* to opencode's sessions plus our identity
@@ -265,10 +265,12 @@ CREATE TABLE event_log (
 | `event_type` | TEXT | NOT NULL | The `type` field from opencode's SSE event (e.g. `"message.part.delta"`). |
 | `payload_json` | TEXT | NOT NULL | The full event body as serialised JSON. |
 
-Audit log of opencode events we've seen. v0 isn't writing this table
-yet — `#11` will land the SSE consumer that fills it. The plan is to
-cap by row count or age; not the source of truth for conversation
-content.
+Audit log of opencode events we've seen. v0 isn't writing this
+table yet. `#11` landed the in-memory `EventBus` SSE consumer used
+by `/v1/chat/stream`, but the bus does not persist events to this
+table — that's a separate (not yet filed) follow-up. The plan when
+it lands is to cap by row count or age; it is not the source of
+truth for conversation content.
 
 `oc_session_id` is nullable because opencode emits some
 session-independent events (`server.connected`).

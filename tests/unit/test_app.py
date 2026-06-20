@@ -187,6 +187,81 @@ def test_lifespan_skips_default_model_probe_on_degraded_boot(tmp_path: Path) -> 
 
 
 # ---------------------------------------------------------------------------
+# Event bus lifecycle (#11 step 7)
+# ---------------------------------------------------------------------------
+
+
+def test_lifespan_attaches_event_bus_to_state(tmp_path: Path) -> None:
+    """``app.state.opencode_event_bus`` is an :class:`EventBus` instance
+    after lifespan startup. Step 8 (chat_stream) consumes it via
+    :func:`get_event_bus`.
+    """
+    from scufris_server.events import EventBus
+
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+
+    with respx.mock(base_url=settings.opencode_url, assert_all_called=False) as mock:
+        _mock_happy_opencode(mock)
+        with TestClient(app):
+            bus = app.state.opencode_event_bus
+            assert isinstance(bus, EventBus)
+            # ``start`` was called — the reader task exists.
+            assert bus._task is not None
+            assert not bus._task.done()
+
+
+def test_lifespan_stops_event_bus_before_closing_client(tmp_path: Path) -> None:
+    """Shutdown ordering: bus stops first, then client closes. Verified
+    by checking both states post-shutdown.
+
+    Why the order matters: the bus borrows the client's httpx
+    transport. If the client closed first, the bus's in-flight
+    ``GET /event`` would surface as an ugly ``ClientClosedError``
+    in the reconnect loop's logs. Stopping the bus first cancels
+    its reader cleanly.
+    """
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+
+    with respx.mock(base_url=settings.opencode_url, assert_all_called=False) as mock:
+        _mock_happy_opencode(mock)
+        with TestClient(app):
+            pass  # exit → lifespan shutdown
+
+    bus = app.state.opencode_event_bus
+    assert bus._task is None, "bus.stop() should clear _task"
+    assert bus.connected is False
+    assert app.state.opencode._client.is_closed, "client should also be closed"
+
+
+def test_lifespan_starts_event_bus_even_on_degraded_boot(tmp_path: Path) -> None:
+    """When opencode is unreachable, the bus is still started — its
+    reconnect loop will keep retrying in the background until
+    opencode comes back. The streaming chat handler's
+    ``bus.subscribe()`` call will raise :class:`OpencodeUnavailable`
+    after its per-call timeout, which is the user-visible surface
+    for upstream death — not a startup failure.
+
+    This validates TASK.md's "tolerate ``OpencodeNetworkError`` on
+    first connect" requirement: the lifespan never re-raises.
+    """
+    from scufris_server.events import EventBus
+
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+
+    with respx.mock(base_url=settings.opencode_url, assert_all_called=False) as mock:
+        mock.get("/global/health").mock(side_effect=httpx.ConnectError("refused"))
+        with TestClient(app):
+            assert app.state.opencode_initial_health is None  # degraded
+            bus = app.state.opencode_event_bus
+            assert isinstance(bus, EventBus)
+            assert bus._task is not None  # started anyway
+            assert not bus._task.done()
+
+
+# ---------------------------------------------------------------------------
 # Degraded boot
 # ---------------------------------------------------------------------------
 
@@ -287,9 +362,9 @@ def test_lifespan_loads_identity_from_explicit_config_path(
     config = _write_config_toml(
         tmp_path / "config.toml",
         # Single-user shape (v1 carryover, design §11).
-        '[user]\n'
+        "[user]\n"
         'username = "alex"\n'
-        '[user.identity]\n'
+        "[user.identity]\n"
         'cli = "alex"\n'
         'telegram = "8231376426"\n',
     )

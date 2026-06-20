@@ -60,6 +60,9 @@ scufris-bot/
 │   ├── store.py           # SQLite + migrations
 │   ├── logging.py         # JSON logging, request-id middleware
 │   ├── dependencies.py    # FastAPI Depends() helpers
+│   ├── events.py          # ThinkingEvent + per-process EventBus
+│   ├── event_mapping.py   # Pure mapping opencode/event → ThinkingEvent
+│   ├── sse.py             # SSE wire framing + keepalive helper
 │   ├── routes/            # One APIRouter per endpoint group
 │   ├── migrations/        # *.sql, applied at boot in lex order
 │   └── internal/          # Reserved for plugin-only HTTP surface
@@ -68,6 +71,7 @@ scufris-bot/
 │   ├── unit/              # Default `pytest` runs these — fully offline
 │   └── integration/       # `pytest -m integration` — needs live opencode + ollama
 ├── tasks/                 # tatr task tracker — see "Task tracking"
+├── examples/              # Small scripts that hit a live server
 ├── docs/                  # You are here
 ├── flake.nix              # Devshell + nix-build + nix flake check
 └── pyproject.toml         # Deps, ruff, mypy, pytest config
@@ -79,8 +83,8 @@ Two suites:
 
 | Suite | Command | What it runs | Network? |
 |-------|---------|--------------|----------|
-| Unit | `uv run --active pytest` (or just `uv run --active pytest -m "not integration"`) | Everything in `tests/unit/`. ~220 tests. | No. opencode + ollama mocked via `respx`. |
-| Integration | `uv run --active pytest -m integration` | Tests in `tests/integration/` (`test_chat_real.py`, `test_sessions_real.py`). | Yes. Needs live opencode + ollama with `qwen3:latest` pulled. |
+| Unit | `uv run --active pytest` (or just `uv run --active pytest -m "not integration"`) | Everything in `tests/unit/`. ~290 tests. | No. opencode + ollama mocked via `respx`. |
+| Integration | `uv run --active pytest -m integration` | Tests in `tests/integration/` (`test_chat_real.py`, `test_chat_stream_real.py`, `test_sessions_real.py`). | Yes. Needs live opencode + ollama with `qwen3:latest` pulled. |
 
 ### Unit tests
 
@@ -114,9 +118,15 @@ shape: write the test alongside the implementation, prefer
 Integration tests exercise full round trips against live `opencode
 serve` + `ollama` with `qwen3:latest`. They self-skip if either is
 missing, so the suite stays green on CI where they aren't available.
-Today there are two:
+Today there are three:
 
 - `test_chat_real.py` — single-turn `/v1/chat` round trip.
+- `test_chat_stream_real.py` — `/v1/chat/stream` SSE round trip.
+  Two cases: a single turn that asserts at least one `thinking`
+  event arrives plus a well-formed `done`, and a two-turn case that
+  asserts session reuse across calls in the same channel. Both
+  snapshot opencode's `/session` list before and after to verify
+  the ADR-13 invariant (scufris never destroys upstream sessions).
 - `test_sessions_real.py` — seed two channels, list with enrichment,
   clear one, list again, bulk clear, list again. Verifies the ADR-13
   "scufris doesn't destroy upstream sessions" invariant by snapshotting
@@ -138,8 +148,9 @@ uv run --active pytest -m integration
 
 Expected runtime: 20–40 s for chat, 30–60 s for sessions on a warm
 cache; the first run after booting `ollama` can take longer while
-the model loads. Per-test ceilings: 90 s for chat, 120 s for
-sessions. Anything past those fails.
+the model loads. Per-test ceilings: 90 s for chat, 90 s for the
+chat-stream happy path, 120 s for the chat-stream reuse case, and
+120 s for sessions. Anything past those fails.
 
 To exclude integration tests explicitly (CI default):
 
@@ -307,18 +318,18 @@ When picking up new work:
 4. When done, fill in the closing notes (test counts, deviations,
    follow-ups) and run `tatr` to mark CLOSED.
 
-The current backlog (as of #12 closing) — see `tasks/` directly for
-authoritative state:
+The current backlog (as of `#11` closing) — see `tasks/` directly
+for authoritative state:
 
 | Task | Priority | Status | Subject |
 |------|----------|--------|---------|
-| 091044 (#10) | 85 | OPEN | Per-user opencode session management |
-| 091038 | 85 | OPEN | Journal tooling |
+| 091038       | 85 | OPEN | Journal tooling |
 | 091049 (#14) | 80 | OPEN | scufris-cli v2 |
-| 091045 (#11) | 75 | OPEN | SSE streaming |
-| 091039 | 75 | OPEN | Weather / web search tools |
+| 091039       | 75 | OPEN | Weather / web search tools |
 | 091047 (#13) | 75 | OPEN | `/v1/stats` and `/v1/clear` |
 | 093108 (#30) | 70 | OPEN | Permissions UX bridge |
+| 111428 (#33) | 70 | OPEN | Channel fork |
+| 111430 (#34) | 50 | OPEN | Channel server-side expire |
 
 ## Git workflow
 

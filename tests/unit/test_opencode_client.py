@@ -24,10 +24,12 @@ from scufris_server.opencode_client import (
     OpencodeClientError,
     OpencodeNetworkError,
     OpencodeServerError,
+    OpencodeStaleSessionError,
     OpencodeUnavailable,
     SendMessageRequest,
     Session,
     TextPartInput,
+    _BusReconnected,
 )
 
 BASE = "http://opencode.test"
@@ -514,3 +516,107 @@ async def test_base_url_trailing_slash_stripped() -> None:
                 return_value=Response(200, json=_health_body())
             )
             await c.health()
+
+
+# ---------------------------------------------------------------------------
+# OpencodeStaleSessionError (#11 step 2 — used by the streaming path
+# in step 5+; tested here for constructor shape)
+# ---------------------------------------------------------------------------
+
+
+def test_stale_session_error_carries_session_id() -> None:
+    """Stale-session 404s preserve the session id so the streaming
+    layer can drop the matching ``session_links`` row before
+    recreating + retrying.
+    """
+    exc = OpencodeStaleSessionError("ses_abc123")
+    assert exc.session_id == "ses_abc123"
+
+
+def test_stale_session_error_message_includes_session_id() -> None:
+    """The string form is operator-readable — useful in logs.
+    Helps distinguish "stale session ses_abc123" from a generic
+    "opencode returned 4xx" when scanning structured logs.
+    """
+    exc = OpencodeStaleSessionError("ses_abc123")
+    assert "ses_abc123" in str(exc)
+    assert "404" in str(exc)
+
+
+def test_stale_session_error_is_opencode_error_subclass() -> None:
+    """Hierarchy check: catch-all ``except OpencodeError`` in a
+    generic handler still picks up stale-session failures. Verifies
+    the class graph stays consistent.
+    """
+    from scufris_server.opencode_client import OpencodeError
+
+    exc = OpencodeStaleSessionError("ses_abc")
+    assert isinstance(exc, OpencodeError)
+
+
+# ---------------------------------------------------------------------------
+# _BusReconnected sentinel (#11 step 4 — broadcast by EventBus in
+# step 5+ on every successful reconnect after the first)
+# ---------------------------------------------------------------------------
+
+
+def test_bus_reconnected_is_a_singleton_shape() -> None:
+    """The sentinel carries no fields — the type itself signals
+    the event. Two instances are equal (frozen + field-free dataclass
+    means identity-via-value).
+    """
+    a = _BusReconnected()
+    b = _BusReconnected()
+    assert a == b
+
+
+def test_bus_reconnected_is_hashable() -> None:
+    """Frozen dataclass → can sit in a set / be a dict key. Useful
+    if the consumer ever wants to short-circuit on "seen reconnect
+    already this turn" without storing the count.
+    """
+    {_BusReconnected()}  # would raise TypeError if unhashable
+
+
+def test_bus_reconnected_is_isinstance_checkable() -> None:
+    """The bus consumer loop uses ``isinstance(item, _BusReconnected)``
+    to discriminate sentinels from raw event dicts. Sanity-check the
+    type-check path works as expected.
+    """
+    item: object = _BusReconnected()
+    assert isinstance(item, _BusReconnected)
+    assert not isinstance({}, _BusReconnected)
+
+
+# ---------------------------------------------------------------------------
+# httpx_client property (#11 step 4 — borrowed by EventBus for the
+# upstream /event stream connection)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_httpx_client_returns_underlying_async_client() -> None:
+    """The bus borrows the AsyncClient via this property. The
+    instance returned must be the same one used by the typed
+    methods so auth + base_url + timeout config is shared.
+    """
+    async with OpencodeClient(BASE, password="hunter2") as c:
+        borrowed = c.httpx_client
+        assert isinstance(borrowed, httpx.AsyncClient)
+        # Same instance as the private attribute used by _request().
+        assert borrowed is c._client
+
+
+@pytest.mark.asyncio
+async def test_httpx_client_preserves_base_url_and_auth() -> None:
+    """Auth credentials and base URL are configured at client
+    construction; the borrowed reference must reflect them so the
+    bus's ``stream("GET", "/event")`` call hits the right endpoint
+    with the right Authorization header.
+    """
+    async with OpencodeClient(BASE, password="hunter2") as c:
+        borrowed = c.httpx_client
+        # base_url stripped of trailing slash by OpencodeClient
+        assert str(borrowed.base_url) == BASE
+        # BasicAuth carries the password we set
+        assert borrowed.auth is not None

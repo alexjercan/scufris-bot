@@ -50,21 +50,27 @@ What's implemented today:
 - Identity layer (`#12`): TOML-driven user resolution + a
   `SCUFRIS_USER_ID` server-side override.
 - Endpoints: `GET /v1/healthz`, `GET /v1/version`,
-  `POST /v1/identity/resolve`, `POST /v1/chat`.
+  `POST /v1/identity/resolve`, `POST /v1/chat`,
+  `POST /v1/chat/stream`, `GET /v1/sessions`,
+  `POST /v1/sessions/{channel_id}/clear`, `POST /v1/clear`.
 - Async opencode client wrapping a useful subset of opencode's HTTP
-  API (health, default-model probe, create_session, send_message).
-- Synchronous chat path (no streaming yet) with channel ↔ session
-  caching in SQLite.
+  API (health, default-model probe, create_session, send_message,
+  long-lived `/event` SSE consumer).
+- Synchronous and streaming chat paths sharing one channel ↔ session
+  cache in SQLite. The streaming path consumes a per-process
+  `EventBus` that reads opencode `/event` once and fans out to
+  subscribers (ADR-10).
 
 What's *not* implemented yet (placeholder modules exist):
 
-- Session management endpoints (`/v1/sessions`, fork/clear) — task
-  `#10` (`tasks/20260613-091044`).
-- SSE streaming chat — task `#11` (`tasks/20260613-091045`).
-- Stats / clear / per-user telemetry — task `#13`
+- Stats / per-user telemetry — task `#13`
   (`tasks/20260613-091047`).
 - Permission UX bridge — task `#30` (`tasks/20260613-093108`).
 - v2 CLI client — task `#14` (`tasks/20260613-091049`).
+- Channel fork (`POST /v1/sessions/{id}/fork`) — task `#33`
+  (`tasks/20260616-111428`).
+- Channel server-side expire — task `#34`
+  (`tasks/20260616-111430`).
 - The in-tree opencode plugin (`.opencode/plugin/scufris.ts`) — see
   design doc §5.3.
 
@@ -108,8 +114,9 @@ back into the codebase.
 
 ## Caveats
 
-These docs reflect the codebase **as of 2026-06-15** (after `#12`
-closed and identity landed). They will drift as #10/#11/#14/#30 land
-new endpoints and rewrite the lifespan. When in doubt, the source is
-authoritative — every claim here should be cross-referenceable to a
-file in `scufris_server/`.
+These docs reflect the codebase **as of 2026-06-20** (after `#10`,
+`#11`, and `#12` closed — sessions, SSE streaming, and identity all
+landed). They will drift as `#13` / `#14` / `#30` / `#33` / `#34`
+land new endpoints and rewrite the lifespan. When in doubt, the
+source is authoritative — every claim here should be cross-
+referenceable to a file in `scufris_server/`.

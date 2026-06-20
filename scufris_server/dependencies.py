@@ -10,7 +10,9 @@ Step 7 added :func:`get_opencode_client`. Step 8 (chat) adds
 the path or the lifespan singleton. #12 (identity) adds
 :func:`get_user_identity` and :func:`get_identity_override` so chat
 and identity routes can read the lifespan-cached config.toml +
-``SCUFRIS_USER_ID`` override.
+``SCUFRIS_USER_ID`` override. #11 step 7 adds :func:`get_event_bus`
+so the streaming chat handler (``POST /v1/chat/stream``, step 8 of
+#11) can subscribe to the process-wide event bus.
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from collections.abc import AsyncIterator
 
 from fastapi import Request
 
+from scufris_server.events import EventBus
 from scufris_server.identity import IdentityFile
 from scufris_server.opencode_client import OpencodeClient
 from scufris_server.store import connect
@@ -115,3 +118,31 @@ def get_identity_override(request: Request) -> int | None:
     """
     override: int | None = request.app.state.identity_override
     return override
+
+
+def get_event_bus(request: Request) -> EventBus:
+    """FastAPI dependency: return the lifespan-scoped opencode event bus.
+
+    The bus is the single process-wide consumer of opencode's
+    ``GET /event`` SSE stream (ADR-10). It's constructed and
+    started by :func:`scufris_server.app.lifespan` (#11 step 7)
+    and stashed on ``app.state.opencode_event_bus``. Always
+    present, even on degraded boots — the bus's own reconnect
+    loop handles upstream unavailability.
+
+    Consumed by the streaming chat handler
+    (``POST /v1/chat/stream``, #11 step 8) which calls
+    ``bus.subscribe(session_id)`` for the duration of a turn.
+
+    Usage::
+
+        from fastapi import Depends
+        from scufris_server.dependencies import get_event_bus
+
+        @router.post("/foo")
+        async def foo(bus: EventBus = Depends(get_event_bus)):
+            async with bus.subscribe(session_id) as queue:
+                ...
+    """
+    bus: EventBus = request.app.state.opencode_event_bus
+    return bus

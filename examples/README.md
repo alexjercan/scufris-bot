@@ -19,6 +19,7 @@ failure, and cleans up after itself. Run from the repo root.
 | `check_boot.py`            | Spawn `python -m scufris_server`; fetch `/openapi.json`.         |    optional     |
 | `check_request.py`         | Boot the server; call `/v1/healthz` + `/v1/version`; show ids.   |    optional     |
 | `check_chat.py`            | Boot the server; POST `/v1/chat` 3× to verify session reuse.     |     **yes**     |
+| `check_chat_stream.py`     | Boot the server; stream `/v1/chat/stream` 2x to stderr.          |     **yes**     |
 | `check_sessions.py`        | Boot + 2 chats; walk list / clear / bulk-clear with idempotency. |     **yes**     |
 
 ## Quick start
@@ -32,6 +33,7 @@ python examples/check_opencode_health.py    # requires `opencode serve` running
 python examples/check_boot.py
 python examples/check_request.py
 python examples/check_chat.py                # requires opencode + a connected provider
+python examples/check_chat_stream.py         # requires opencode + a connected provider
 python examples/check_sessions.py            # requires opencode + a connected provider
 ```
 

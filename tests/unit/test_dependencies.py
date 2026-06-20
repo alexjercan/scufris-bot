@@ -28,7 +28,12 @@ from httpx import Response
 
 from scufris_server.app import create_app
 from scufris_server.config import Settings
-from scufris_server.dependencies import get_db_conn, get_opencode_client
+from scufris_server.dependencies import (
+    get_db_conn,
+    get_event_bus,
+    get_opencode_client,
+)
+from scufris_server.events import EventBus
 
 OPENCODE_TEST_URL = "http://opencode.test"
 HEALTH_OK_BODY = {"healthy": True, "version": "1.15.13"}
@@ -71,6 +76,36 @@ def test_get_opencode_client_returns_lifespan_client(tmp_path: Path) -> None:
             test_client.get("/_dep_check_oc")
             # Handler saw the same instance the lifespan stashed.
             assert captured == [app.state.opencode]
+
+
+# ---------------------------------------------------------------------------
+# get_event_bus (#11 step 7)
+# ---------------------------------------------------------------------------
+
+
+def test_get_event_bus_returns_lifespan_bus(tmp_path: Path) -> None:
+    """Handler-level ``Depends(get_event_bus)`` returns the same
+    :class:`EventBus` instance that :func:`lifespan` constructed and
+    started. This is the contract the step 8 streaming chat handler
+    relies on for ``bus.subscribe(session_id)``.
+    """
+    app, settings = _make_app(tmp_path)
+    captured: list[object] = []
+
+    @app.get("/_dep_check_bus")
+    def _check(
+        bus: Annotated[Any, Depends(get_event_bus)],
+    ) -> dict[str, str]:
+        captured.append(bus)
+        return {"ok": "yes"}
+
+    with respx.mock(base_url=settings.opencode_url, assert_all_called=False) as mock:
+        _mock_happy_opencode(mock)
+        with TestClient(app) as test_client:
+            test_client.get("/_dep_check_bus")
+            assert len(captured) == 1
+            assert isinstance(captured[0], EventBus)
+            assert captured[0] is app.state.opencode_event_bus
 
 
 # ---------------------------------------------------------------------------

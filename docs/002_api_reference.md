@@ -11,12 +11,12 @@ The headline:
 | GET    | `/v1/version`                     | scufris version + cached opencode version          | live   |
 | POST   | `/v1/identity/resolve`            | Resolve `(surface, surface_id)` → user             | live   |
 | POST   | `/v1/chat`                        | Synchronous single-turn chat                       | live   |
+| POST   | `/v1/chat/stream`                 | SSE streaming chat                                 | live   |
 | GET    | `/v1/sessions`                    | List a user's channels with enriched session info  | live   |
 | POST   | `/v1/sessions/{channel_id}/clear` | Drop the `session_links` row for one channel       | live   |
 | POST   | `/v1/clear`                       | Drop every `session_links` row for one user        | live   |
 | —      | `/v1/stats`                       | Per-user telemetry                                 | placeholder (#13) |
 | —      | `/v1/permissions/*`               | Permission reply for opencode tool calls           | placeholder (#30) |
-| —      | `/v1/chat/stream`                 | SSE streaming chat                                 | not yet (#11)     |
 | —      | `/v1/sessions/{channel_id}/fork`  | Fork a channel onto a new opencode session         | not yet (#33)     |
 
 Placeholders 404 today — the routers exist as empty `APIRouter`
@@ -267,7 +267,9 @@ creates) an opencode session for `(user_id, channel)`, sends the
 message, blocks until opencode finishes the turn, and returns the
 assistant's reply with token / cost metadata.
 
-This is the only path today. Streaming (`/v1/chat/stream`) is `#11`.
+The streaming sibling is [`POST /v1/chat/stream`](#post-v1chatstream),
+which has the same request shape but returns an SSE stream of
+intermediate thinking events followed by a terminal `done` event.
 
 ### Request
 
@@ -397,6 +399,270 @@ curl -s -X POST http://127.0.0.1:7080/v1/chat \
   }
 }
 ```
+
+## `POST /v1/chat/stream`
+
+Source: `routes/chat_stream.py:242`.
+
+Server-Sent Events variant of `/v1/chat`. Same request body, same
+identity / session resolution, same downstream `send_message` call to
+opencode. The difference is the response: instead of blocking until
+the turn finishes and returning one JSON document, the handler holds
+the connection open and emits a stream of `event:`-prefixed records
+as opencode produces them. The stream terminates with a `done` event
+that carries the same `{reply, oc_session_id, oc_message_id, tokens,
+cost}` payload that `/v1/chat` would have returned.
+
+This is the "see what scufris is doing" UX path: subagent spawns,
+tool calls, reasoning text, and permission events arrive as
+`thinking` events while the turn is in flight. Clients render them
+live; `/v1/chat` clients only see the final reply.
+
+### Request
+
+Identical to `/v1/chat`. Same `ChatRequest` model, same validation
+rules, same fields:
+
+```json
+{
+  "message": "what is 2+2?",
+  "channel": {
+    "surface": "cli",
+    "surface_id": "alex",
+    "agent": "build"
+  }
+}
+```
+
+See [`POST /v1/chat`](#post-v1chat) for the field-by-field breakdown
+of `message` and `channel`. The handler cross-imports `ChatRequest`,
+`_resolve_session`, `_touch_session`, and `_raise_503` from
+`routes/chat.py` so the two endpoints stay structurally identical
+ahead of the actual `send_message` step.
+
+No special request headers are required. SSE doesn't mandate
+`Accept: text/event-stream`; the response is always
+`Content-Type: text/event-stream` regardless of what the client sent.
+
+### Response
+
+Status `200 OK` with `Content-Type: text/event-stream; charset=utf-8`
+and `Cache-Control: no-cache`. The body is an SSE stream framed per
+the W3C spec: each record is an `event:` line plus a `data:` line
+(holding a single JSON document) plus a blank line. Comment lines
+(`:` prefix) are keepalives — clients drop them.
+
+Three event types appear, in this order: zero or more `thinking`
+events, then either one `done` event (success) or one `error` event
+(mid-stream failure). The stream is closed by the server immediately
+after the terminal event.
+
+Example wire excerpt:
+
+```
+event: thinking
+data: {"type":"thinking","kind":"reasoning","source":"opencode","depth":0,"text":"Thinking through the arithmetic..."}
+
+event: thinking
+data: {"type":"thinking","kind":"text_delta","source":"opencode","depth":0,"text":"4"}
+
+event: done
+data: {"type":"done","message":"4","oc_session_id":"ses_abc...","oc_message_id":"msg_def...","tokens":{"input":12,"output":1},"cost":0.0}
+
+```
+
+(The trailing blank line after `done` terminates the final record.)
+
+#### `thinking` event
+
+Mapped from opencode `/event` stream items by `event_mapping.py`. The
+source events are `message.part.delta`, `message.part.updated`, and
+`permission.updated`. One opencode event may produce zero, one, or
+many `thinking` events (a multi-tool subagent spawn fans out into
+several `tool_call` events, for example).
+
+| Field    | Type     | Meaning |
+|----------|----------|---------|
+| `type`   | `string` | Always `"thinking"`. Lets a single event-dispatch switch in the client match this against `done` / `error`. |
+| `kind`   | `string` | What the event represents. See the table below for the enum. |
+| `source` | `string` | Always `"opencode"` today. Reserved for future scufris-side synthetic events (e.g. plugin-emitted facts). |
+| `depth`  | `int`    | Nesting level. `0` is the user-facing agent; `1+` are subagents spawned by tool calls. Lets clients indent or fold subagent output. |
+| `text`   | `string` | Free-form text payload. Present on every `kind`; meaning depends on `kind` (delta text, tool name, permission summary). |
+
+`kind` values currently emitted:
+
+| `kind`        | Source opencode event              | What `text` carries |
+|---------------|------------------------------------|---------------------|
+| `text_delta`  | `message.part.delta` (text part)   | The newly-appended substring. Concatenated by the client to reconstruct the streaming reply. |
+| `reasoning`   | `message.part.delta` (reasoning)   | Reasoning-trace delta (qwen3 / claude thinking blocks). Same incremental shape as `text_delta`. |
+| `tool_call`   | `message.part.updated` (tool part) | One-line summary of the tool invocation (e.g. `bash echo hi`, `read /tmp/x`). |
+| `tool_meta`   | `permission.updated`               | Permission-flow summary (e.g. `permission required: bash`). |
+
+Clients that want literal token-by-token streaming concatenate every
+`text_delta`. Clients that want a structured timeline (CLI v2's
+target) render each event as a separate line.
+
+#### `done` event
+
+Terminal success event. Same fields as the `/v1/chat` response body
+plus a discriminator `type`:
+
+```json
+{
+  "type": "done",
+  "message": "4",
+  "oc_session_id": "ses_abc123...",
+  "oc_message_id": "msg_def456...",
+  "tokens": {"input": 12, "output": 1},
+  "cost": 0.0
+}
+```
+
+| Field            | Type     | Meaning |
+|------------------|----------|---------|
+| `type`           | `string` | Always `"done"`. |
+| `message`        | `string` | The full assistant reply. Equivalent to `/v1/chat`'s `reply` field — concatenation of every `type=="text"` part. Field renamed from `reply` to `message` for symmetry with the request shape (D7). |
+| `oc_session_id`  | `string` | Opencode session id (`ses_...`). Same value across turns within a channel. |
+| `oc_message_id`  | `string` | Opencode assistant-message id (`msg_...`). Fresh per turn. |
+| `tokens.input`   | `int`    | Input tokens consumed this turn. `0` if opencode didn't report. |
+| `tokens.output`  | `int`    | Output tokens produced this turn. Same caveat. |
+| `cost`           | `float`  | Per-turn cost in USD. `0.0` for self-hosted models. |
+
+After this event the server closes the stream.
+
+#### `error` event
+
+Mid-stream failure. Emitted when an exception escapes the
+`send_message` task *after* the response has already been committed
+(i.e. headers and at least one byte sent). Pre-stream failures use
+the JSON 503 path instead — see "Errors" below.
+
+```json
+{
+  "type": "error",
+  "error": "session ses_abc123... was deleted upstream",
+  "error_type": "OpencodeStaleSessionError"
+}
+```
+
+| Field        | Type     | Meaning |
+|--------------|----------|---------|
+| `type`       | `string` | Always `"error"`. |
+| `error`      | `string` | Human-readable failure description. |
+| `error_type` | `string` | Symbolic name. Currently one of `OpencodeNetworkError`, `OpencodeServerError`, `OpencodeStaleSessionError`, `BusReconnected`, `ZeroTokensInResponseError`. |
+
+After this event the server closes the stream. Clients must surface
+the failure to the user — no `done` event follows.
+
+#### Keepalive comments
+
+Every 15 seconds of idle stream time, the server writes a single SSE
+comment line:
+
+```
+: keepalive
+
+```
+
+(Comment line, then a blank line.) The W3C SSE spec mandates that
+clients drop comment lines silently; the only purpose is to keep
+intermediaries (reverse proxies, CDNs, NATs) from idle-timing out
+the connection. The interval is `KEEPALIVE_SECONDS = 15.0` in
+`scufris_server/sse.py`, sized below the 30-second nginx default.
+
+The keepalive loop runs under a `shield`-based race wrapper
+(`stream_with_keepalive`); a cancelled keepalive never tears down
+the producer task.
+
+### Side effects
+
+Same as `/v1/chat`:
+
+- May insert into `users` and `surface_bindings` (identity
+  resolution).
+- May insert into `channels` and `session_links` (first call for a
+  new `(user_id, channel)` triple).
+- Updates `session_links.last_used_at` on every reuse.
+- Sends one `POST /session` (only on first call per channel) and one
+  `POST /session/:id/message` to opencode.
+
+Additional: registers an in-memory subscriber queue against the
+process-wide `EventBus` (see
+[`001_architecture.md` § SSE event bus](001_architecture.md#sse-event-bus))
+for the duration of the stream. The queue is torn down when the
+handler exits, success or failure.
+
+### Errors
+
+Two failure regimes — **pre-stream** (handler hasn't sent any bytes
+yet) and **mid-stream** (response committed, body in flight). They
+surface differently on the wire.
+
+**Pre-stream** — same as `/v1/chat`:
+
+| Status | error_type            | Meaning |
+|--------|-----------------------|---------|
+| 422    | (FastAPI default)     | Malformed request body (empty fields, missing keys). |
+| 503    | `DefaultModelMissing` | `app.state.opencode_default_model` is `None`. |
+| 503    | `OpencodeNetworkError`| `create_session` hit a transport error. |
+| 503    | `OpencodeServerError` | `create_session` got a 5xx from opencode. |
+| 503    | `OpencodeUnavailable` | `EventBus.subscribe()` hit its connect-timeout — the bus has never managed to reach opencode `/event`. |
+| 500    | (uncaught)            | `OpencodeClientError` (4xx — bug in our request shape), SQLite error, etc. |
+
+Body shape matches `/v1/chat`:
+
+```json
+{
+  "detail": {
+    "error": "...",
+    "error_type": "..."
+  }
+}
+```
+
+**Mid-stream** — emitted as an `error` SSE event (see above):
+
+| `error_type`                 | Cause |
+|------------------------------|-------|
+| `OpencodeNetworkError`       | `send_message` hit a transport error after the stream opened. |
+| `OpencodeServerError`        | `send_message` got a 5xx. |
+| `OpencodeStaleSessionError`  | Opencode returned 404 for the session id — the upstream session was deleted (manually, or by an `expire` flow, or by an opencode restart on non-persistent storage). |
+| `BusReconnected`             | The upstream `/event` stream dropped mid-turn and the bus reconnected. Events emitted during the gap may have been missed. Reserved for §16.1 follow-up work. |
+| `ZeroTokensInResponseError`  | Opencode reported `tokens.input == 0` and `tokens.output == 0` on the final message — interpreted as a malformed turn rather than a successful zero-token reply. |
+
+### Examples
+
+Single turn against a fresh channel. The first record arrives as soon
+as opencode emits its first event (usually a reasoning-delta) —
+typically within a second on a warm model:
+
+```bash
+curl -N -s -X POST http://127.0.0.1:7080/v1/chat/stream \
+  -H 'content-type: application/json' \
+  -d '{
+        "message": "reply with the single word: pong",
+        "channel": {"surface":"cli","surface_id":"alex","agent":"build"}
+      }'
+```
+
+(`-N` disables curl's output buffering. Without it, curl waits for
+the connection to close before printing anything, which defeats the
+point.)
+
+Filter to just the `done` event with `jq`:
+
+```bash
+curl -N -s -X POST http://127.0.0.1:7080/v1/chat/stream \
+  -H 'content-type: application/json' \
+  -d '{"message":"hi","channel":{"surface":"cli","surface_id":"alex","agent":"build"}}' \
+  | awk '/^data: /{ sub(/^data: /,""); print }' \
+  | jq -c 'select(.type == "done")'
+```
+
+For an end-to-end Python client that parses every event type and
+prints them as they arrive, see `examples/check_chat_stream.py`. It
+uses `httpx.AsyncClient.stream()` plus a ~30-line inline SSE parser
+— no extra dependencies.
 
 ## `GET /v1/sessions`
 
@@ -653,11 +919,6 @@ of the stats router and lives on the dedicated `clear_router` in
 `scufris_server/routes/sessions.py`.
 
 ## Future endpoints (not yet wired)
-
-- `POST /v1/chat/stream` — SSE variant of `/v1/chat`. Same request
-  shape, response is a stream of `ThinkingEvent`-shaped chunks
-  terminating in a `done` event. Owned by `#11`. Will live in
-  `routes/chat.py` alongside the synchronous handler.
 
 - `POST /v1/sessions/{channel_id}/fork` — additive, git-branch-style
   fork of an existing channel onto a new opencode session. Optional

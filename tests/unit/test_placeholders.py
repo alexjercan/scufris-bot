@@ -17,8 +17,13 @@ update :data:`scufris_server.routes.ROUTERS`.
 ``scufris_server.routes.identity`` from placeholders to real
 implementations; their cases were dropped from the parametrize lists
 below. #10 (``20260613-091044``) promoted
-``scufris_server.routes.sessions`` similarly. The remaining
-placeholders still belong to their owning tasks.
+``scufris_server.routes.sessions`` similarly. #11 step 2
+(``20260613-091045``) promoted ``scufris_server.events`` to real
+(exposes ``ThinkingEvent``); its row was removed from
+:data:`NON_HTTP_PLACEHOLDERS`. #11 step 9 mounted
+``scufris_server.routes.chat_stream`` (``POST /v1/chat/stream``);
+the ROUTERS count assertion below bumped from 5 to 6. The
+remaining placeholders still belong to their owning tasks.
 """
 
 from __future__ import annotations
@@ -35,7 +40,6 @@ HTTP_PLACEHOLDERS: list[tuple[str, str, str]] = [
 ]
 
 NON_HTTP_PLACEHOLDERS: list[tuple[str, str]] = [
-    ("scufris_server.events", "20260613-091045"),
     ("scufris_server.internal", "20260613-093857"),
 ]
 
@@ -109,12 +113,13 @@ def test_routes_init_imports_placeholders() -> None:
             f"scufris_server.routes.{attr} not imported by routes/__init__.py"
         )
 
-    # ROUTERS: health + identity (#12) + chat + sessions_router (#10) +
-    # clear_router (#10) = 5. The other placeholders are *not*
-    # mounted yet — their owning tasks will append themselves.
+    # ROUTERS: health + identity (#12) + chat + chat_stream (#11) +
+    # sessions_router (#10) + clear_router (#10) = 6. The other
+    # placeholders are *not* mounted yet — their owning tasks will
+    # append themselves.
     from scufris_server.routes import ROUTERS
 
-    assert len(ROUTERS) == 5, (
-        f"expected 5 mounted routers (health, identity, chat, "
-        f"sessions, clear); ROUTERS has {len(ROUTERS)} entries"
+    assert len(ROUTERS) == 6, (
+        f"expected 6 mounted routers (health, identity, chat, "
+        f"chat_stream, sessions, clear); ROUTERS has {len(ROUTERS)} entries"
     )

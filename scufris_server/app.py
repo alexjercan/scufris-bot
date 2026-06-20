@@ -28,8 +28,20 @@ Lifespan order
 7. If the health probe succeeded, probe ``/provider`` and cache a
    default ``ModelRef``. Failure here is also non-fatal; ``/v1/chat``
    hard-fails with 503 in that case until opencode comes back.
-8. Yield to the running app.
-9. On shutdown, close the opencode client.
+8. Construct the :class:`EventBus` borrowing the client's
+   :class:`httpx.AsyncClient` (#11 step 7) and call :meth:`start`.
+   The bus's reader task tolerates upstream failures itself
+   (reconnect loop with exponential backoff per ADR-10), so
+   :meth:`start` is non-blocking and always succeeds — degraded
+   boots get a bus that keeps retrying in the background until
+   opencode comes back. The streaming chat handler
+   (``POST /v1/chat/stream``, step 8 of #11) raises
+   :class:`OpencodeUnavailable` if the bus hasn't connected by the
+   ``subscribe()`` timeout, which is the user-visible failure
+   surface for upstream death.
+9. Yield to the running app.
+10. On shutdown, stop the event bus first (so it can't try to use
+    the httpx transport mid-close), then close the opencode client.
 
 State attached to ``app.state``
 -------------------------------
@@ -44,6 +56,9 @@ State attached to ``app.state``
   ``/v1/chat`` when no explicit model is supplied. ``None`` when
   opencode has nothing connected — chat hard-fails with 503 in that
   state.
+- ``opencode_event_bus`` (#11): the live :class:`EventBus`. Started
+  by the lifespan, consumed by ``POST /v1/chat/stream``. Always
+  attached, even on degraded boots.
 - ``user_identity`` (#12): the parsed :class:`IdentityFile` from
   ``config.toml``. Always present; ``user=None`` when no file
   exists.
@@ -64,6 +79,7 @@ from fastapi import FastAPI
 
 from scufris_server import __version__
 from scufris_server.config import Settings, get_settings
+from scufris_server.events import EventBus
 from scufris_server.identity import (
     DEFAULT_USER_ID,
     DEFAULT_USERNAME,
@@ -225,10 +241,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 )
     app.state.opencode_default_model = default_model
 
+    # 8. Event bus — single shared GET /event consumer per process
+    # (ADR-10; #11 step 7). Borrows the client's httpx transport via
+    # its ``httpx_client`` property. ``start()`` only spawns the
+    # background reader task and returns immediately; the task's
+    # own reconnect loop handles upstream death, so this is safe
+    # to call on a degraded boot too — the bus just keeps retrying
+    # until opencode comes back.
+    bus = EventBus(client.httpx_client)
+    await bus.start()
+    app.state.opencode_event_bus = bus
+
     try:
         yield
     finally:
-        # Shutdown.
+        # Shutdown. Stop the bus FIRST so its reader task isn't
+        # mid-stream when ``client.close()`` tears down the
+        # transport (which would surface as a noisy CancelledError
+        # in the reconnect loop's logs).
+        await bus.stop()
+        logger.info("opencode event bus stopped")
         await client.close()
         logger.info("opencode client closed")
 

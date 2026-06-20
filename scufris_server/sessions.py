@@ -50,15 +50,21 @@ What's here
 
 Joining policy
 --------------
-All reads use INNER JOIN between ``channels`` and ``session_links``.
-The chat-path create transaction wraps both INSERTs in a single
-``with conn:`` block (:func:`create_channel_link`), so a half-
-created "channel without link" row shouldn't exist in practice.
-If one ever appears (operator manual edit, future bug, partial
-crash on a non-transactional driver), it stays invisible to these
-functions — a conservative v0 choice: orphans don't surface as
-ghost UI rows. Add an explicit ``list_orphan_channels`` helper
-later if it ever matters.
+All reads use INNER JOIN between ``channels`` and ``session_links``,
+so orphan ``channels`` rows (no link — left over from
+:func:`clear_channel_link` / :func:`clear_user_links` per ADR-13)
+stay invisible to UI surfaces (no ghost rows in
+:func:`list_user_channels`, no false-positive hits in
+:func:`get_channel`).
+
+Writes handle orphans transparently: :func:`create_channel_link`
+does a lookup-first pass and reuses an existing ``channels.id``
+when one already exists for ``(user_id, surface, surface_id,
+agent)``, falling back to a fresh INSERT only when no row matches.
+That keeps the post-clear "user chats again on the same channel"
+path working without a UNIQUE-constraint crash, and means the v0
+"orphans don't surface as ghost UI rows" choice still holds for
+reads.
 
 Logging
 -------
@@ -180,17 +186,47 @@ def create_channel_link(
     agent: str,
     oc_session_id: str,
 ) -> int:
-    """Atomically insert a ``channels`` + ``session_links`` pair.
+    """Atomically link an opencode session to a channel row.
 
-    Returns the new ``channels.id``. Both inserts share one
-    transaction (``with conn:``) so a crash mid-pair leaves the
-    DB unchanged — no orphan channels (see "Joining policy" in the
-    module docstring).
+    Returns the ``channels.id`` — newly minted on first call for a
+    given ``(user_id, surface, surface_id, agent)`` tuple, reused on
+    subsequent calls after a clear. Both writes (the optional
+    ``channels`` insert and the always-required ``session_links``
+    insert) share one transaction (``with conn:``) so a crash mid-
+    pair leaves the DB unchanged.
+
+    Two flows, picked transparently by an up-front lookup:
+
+    1. **Fresh channel.** No ``channels`` row exists yet for the
+       tuple → INSERT both ``channels`` and ``session_links``.
+       The chat-arrival happy path.
+    2. **Relink after clear.** A ``channels`` row exists but has no
+       ``session_links`` row (left over from
+       :func:`clear_channel_link` / :func:`clear_user_links` per
+       ADR-13 — clears preserve ``channels``, drop only
+       ``session_links``). Reuse the existing ``channel_id``,
+       INSERT only the ``session_links`` row. The chat-arrival-
+       after-clear path.
+
+    The lookup-then-insert is *not* a TOCTOU race in our setup: we
+    hold the connection's write lock across the ``with conn:`` block
+    (sqlite serialises writes via the rollback journal / WAL writer
+    lock) and scufris-server is single-tenant per process. A second
+    writer waiting for the lock would see our committed row on its
+    own SELECT and take path 2 itself.
+
+    If a ``session_links`` row *already* exists for the channel
+    (caller bug — should have called :func:`_resolve_session` and
+    seen ``oc_session_id``), the INSERT fails with
+    :class:`sqlite3.IntegrityError` on the ``session_links.channel_id``
+    PRIMARY KEY. We deliberately don't ``INSERT OR REPLACE`` because
+    silently overwriting an existing link would mask the upstream
+    bug.
 
     Replaces the private ``_record_new_session`` helper that lived
-    in :mod:`scufris_server.routes.chat` before #10. Chat now
-    delegates here so the future fork endpoint (#33) can share the
-    same atomic insert path.
+    in :mod:`scufris_server.routes.chat` before #10. Chat (and chat-
+    stream from #11 step 8, and the future fork endpoint #33)
+    delegate here so the relink fix lands in one place.
 
     Parameters take raw strings rather than the chat layer's
     ``Channel`` pydantic model — keeps this module driver-agnostic
@@ -198,17 +234,28 @@ def create_channel_link(
     """
     now = int(time.time())
     with conn:
-        cursor = conn.execute(
-            "INSERT INTO channels (user_id, surface, surface_id, agent) "
-            "VALUES (?, ?, ?, ?)",
+        existing = conn.execute(
+            "SELECT id FROM channels "
+            "WHERE user_id = ? AND surface = ? "
+            "AND surface_id = ? AND agent = ?",
             (user_id, surface, surface_id, agent),
-        )
-        channel_id = cursor.lastrowid
-        # sqlite3 always returns the new rowid on a successful single-row
-        # INSERT against an INTEGER PRIMARY KEY; the assert is for mypy
-        # (lastrowid is typed ``int | None``) and as a defensive
-        # tripwire if the contract ever changes.
-        assert channel_id is not None, "sqlite3 INSERT did not return lastrowid"
+        ).fetchone()
+        if existing is None:
+            cursor = conn.execute(
+                "INSERT INTO channels (user_id, surface, surface_id, agent) "
+                "VALUES (?, ?, ?, ?)",
+                (user_id, surface, surface_id, agent),
+            )
+            channel_id = cursor.lastrowid
+            # sqlite3 always returns the new rowid on a successful single-row
+            # INSERT against an INTEGER PRIMARY KEY; the assert is for mypy
+            # (lastrowid is typed ``int | None``) and as a defensive
+            # tripwire if the contract ever changes.
+            assert channel_id is not None, "sqlite3 INSERT did not return lastrowid"
+            relinked = False
+        else:
+            channel_id = int(existing["id"])
+            relinked = True
         conn.execute(
             "INSERT INTO session_links "
             "(channel_id, oc_session_id, created_at, last_used_at) "
@@ -216,7 +263,7 @@ def create_channel_link(
             (channel_id, oc_session_id, now, now),
         )
     logger.info(
-        "channel_link created",
+        "channel_link relinked" if relinked else "channel_link created",
         extra={
             "channel_id": channel_id,
             "user_id": user_id,
@@ -224,6 +271,7 @@ def create_channel_link(
             "surface": surface,
             "surface_id": surface_id,
             "agent": agent,
+            "relinked": relinked,
         },
     )
     return channel_id

@@ -34,6 +34,7 @@ for CLI / test use.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any, Literal
 
 import httpx
@@ -85,6 +86,59 @@ class OpencodeUnavailable(OpencodeError):
     Raised exclusively by :meth:`OpencodeClient.health`. Collapses
     network errors *and* non-200 responses so liveness checks only
     need a single ``except``.
+    """
+
+
+class OpencodeStaleSessionError(OpencodeError):
+    """A session id we thought was live is gone — opencode returned 404.
+
+    Distinct from :class:`OpencodeClientError` (which is a generic 4xx
+    on *any* request) so streaming callers can decide whether to
+    recreate the session and retry vs. surface to the user. Carried
+    from v1's ``OpenCodeStaleSessionError``
+    (``feature/opencode:utils/opencode_client.py``). Currently raised
+    only by the streaming path (#11 step 5+); the synchronous chat
+    path does its own create-or-reuse flow and never hits a 404 mid-
+    turn (sessions don't get GC'd between ``_resolve_session`` and
+    ``send_message``).
+
+    The caller is expected to drop the local ``session_links`` row,
+    create a fresh opencode session, and retry the request once.
+    """
+
+    def __init__(self, session_id: str) -> None:
+        super().__init__(f"opencode session {session_id!r} returned 404 (stale)")
+        self.session_id = session_id
+
+
+# ---------------------------------------------------------------------------
+# Bus sentinels (#11 step 4 — consumed by the streaming layer in
+# scufris_server.events.EventBus step 5+)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _BusReconnected:
+    """Sentinel pushed onto every subscriber queue after a bus reconnect.
+
+    Lives here (not in ``scufris_server.events``) because it's an
+    implementation detail of the bus ↔ consumer contract, and the
+    bus uses :class:`OpencodeClient`'s ``httpx.AsyncClient`` for its
+    upstream connection — so it's the client module's
+    responsibility to provide the type the bus broadcasts.
+
+    Consumer policy: treat receipt of this sentinel as a turn-level
+    failure. We cannot guarantee no events were lost during the
+    reconnect window (opencode's ``/event`` is fire-and-forget per
+    design §16.1 assumption); replaying state would require non-
+    trivial reconciliation logic deferred to a future task (see
+    #11 D4 — §16.1-reconnect follow-up). The streaming chat
+    handler (#11 step 8) surfaces this as an ``error`` SSE event
+    with ``error_type: "BusReconnected"`` and lets the client
+    decide whether to retry.
+
+    Frozen so it can be a hashable sentinel; no fields needed —
+    the type itself is the signal.
     """
 
 
@@ -283,6 +337,23 @@ class OpencodeClient:
     async def close(self) -> None:
         """Close the underlying transport. Safe to call repeatedly."""
         await self._client.aclose()
+
+    @property
+    def httpx_client(self) -> httpx.AsyncClient:
+        """Borrow the underlying :class:`httpx.AsyncClient` instance.
+
+        Exposed so :class:`scufris_server.events.EventBus` (step 5
+        of #11) can call ``self._client.stream("GET", "/event")``
+        directly without re-instantiating a transport or fighting
+        the auth setup. The bus reads, never closes — lifecycle
+        ownership stays with this client.
+
+        Read-only by convention: the property has no setter and
+        callers should not swap the transport mid-flight. If you
+        find yourself wanting to mutate it, you probably want a
+        second :class:`OpencodeClient` instance instead.
+        """
+        return self._client
 
     async def __aenter__(self) -> "OpencodeClient":
         return self
