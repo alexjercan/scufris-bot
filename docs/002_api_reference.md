@@ -413,10 +413,10 @@ as opencode produces them. The stream terminates with a `done` event
 that carries the same `{reply, oc_session_id, oc_message_id, tokens,
 cost}` payload that `/v1/chat` would have returned.
 
-This is the "see what scufris is doing" UX path: subagent spawns,
-tool calls, reasoning text, and permission events arrive as
-`thinking` events while the turn is in flight. Clients render them
-live; `/v1/chat` clients only see the final reply.
+This is the "see what scufris is doing" UX path: tool calls and
+their results, model text as it streams, and permission events
+arrive as `thinking` events while the turn is in flight. Clients
+render them live; `/v1/chat` clients only see the final reply.
 
 ### Request
 
@@ -461,13 +461,13 @@ Example wire excerpt:
 
 ```
 event: thinking
-data: {"type":"thinking","kind":"reasoning","source":"opencode","depth":0,"text":"Thinking through the arithmetic..."}
+data: {"type":"thinking","kind":"text","source":"scufris","text":"2 + 2","depth":0}
 
 event: thinking
-data: {"type":"thinking","kind":"text_delta","source":"opencode","depth":0,"text":"4"}
+data: {"type":"thinking","kind":"text","source":"scufris","text":" = 4","depth":0}
 
 event: done
-data: {"type":"done","message":"4","oc_session_id":"ses_abc...","oc_message_id":"msg_def...","tokens":{"input":12,"output":1},"cost":0.0}
+data: {"type":"done","message":"2 + 2 = 4","oc_session_id":"ses_abc...","oc_message_id":"msg_def...","tokens":{"input":12,"output":6},"cost":0.0}
 
 ```
 
@@ -485,22 +485,36 @@ several `tool_call` events, for example).
 |----------|----------|---------|
 | `type`   | `string` | Always `"thinking"`. Lets a single event-dispatch switch in the client match this against `done` / `error`. |
 | `kind`   | `string` | What the event represents. See the table below for the enum. |
-| `source` | `string` | Always `"opencode"` today. Reserved for future scufris-side synthetic events (e.g. plugin-emitted facts). |
-| `depth`  | `int`    | Nesting level. `0` is the user-facing agent; `1+` are subagents spawned by tool calls. Lets clients indent or fold subagent output. |
+| `source` | `string` | Always `"scufris"` today. Reserved for future synthetic event sources (e.g. plugin-emitted facts). |
+| `depth`  | `int`    | Nesting level. Always `0` in v2 (single-agent post-swap; opencode owns the agent hierarchy and does not surface depth back). Field retained for v1 wire compatibility. |
 | `text`   | `string` | Free-form text payload. Present on every `kind`; meaning depends on `kind` (delta text, tool name, permission summary). |
+| `arg`    | `string` | Optional. Present on `tool_call` events: a short human-meaningful summary of the tool's input, capped at ~120 chars (e.g. `echo hi`, `/tmp/x`). Sourced from opencode's `state.title` if set, else a best-effort one-liner from `state.input`. |
 
 `kind` values currently emitted:
 
-| `kind`        | Source opencode event              | What `text` carries |
-|---------------|------------------------------------|---------------------|
-| `text_delta`  | `message.part.delta` (text part)   | The newly-appended substring. Concatenated by the client to reconstruct the streaming reply. |
-| `reasoning`   | `message.part.delta` (reasoning)   | Reasoning-trace delta (qwen3 / claude thinking blocks). Same incremental shape as `text_delta`. |
-| `tool_call`   | `message.part.updated` (tool part) | One-line summary of the tool invocation (e.g. `bash echo hi`, `read /tmp/x`). |
-| `tool_meta`   | `permission.updated`               | Permission-flow summary (e.g. `permission required: bash`). |
+| `kind`        | Source opencode event                              | What `text` carries |
+|---------------|----------------------------------------------------|---------------------|
+| `text`        | `message.part.delta` (text field)                  | The newly-appended substring of the assistant's reply. Concatenated by the client to reconstruct the streaming reply. |
+| `tool_call`   | `message.part.updated` (tool part, `running`)      | The tool's technical name (e.g. `bash`, `read`). The argument summary, if any, is carried in the optional `arg` field. Exactly one per `part.id`. |
+| `tool_result` | `message.part.updated` (tool part, `completed` / `error`) | The tool's technical name on success; `<tool> failed: <error>` (capped at ~240 chars) on error. Exactly one per `part.id`. |
+| `tool_meta`   | `permission.updated`                               | Permission-flow summary (e.g. `permission: bash`). |
+
+Two notes on what is NOT emitted:
+
+- **Reasoning deltas.** Opencode emits `message.part.delta` events
+  with `field == "reasoning"` (qwen3 / claude thinking blocks); the
+  mapper intentionally drops them. Rationale: reasoning streams are
+  noisy, often longer than the reply itself, and conflate "model is
+  thinking" with "tool is doing work". The trace surfaces tool
+  activity instead. If a future client wants reasoning, the mapper
+  needs a new kind and a flag — not part of v2.
+- **`compaction` kind.** Reserved on the wire dataclass for v1
+  binary compatibility but never produced in v2 (opencode owns
+  history management; design §9.5).
 
 Clients that want literal token-by-token streaming concatenate every
-`text_delta`. Clients that want a structured timeline (CLI v2's
-target) render each event as a separate line.
+`text` event's `text` field. Clients that want a structured timeline
+(CLI v2's target) render each event as a separate line.
 
 #### `done` event
 
@@ -633,7 +647,8 @@ Body shape matches `/v1/chat`:
 ### Examples
 
 Single turn against a fresh channel. The first record arrives as soon
-as opencode emits its first event (usually a reasoning-delta) —
+as opencode emits its first mapped event (usually a `text` delta, or
+a `tool_call` if the model decides to use a tool before replying) —
 typically within a second on a warm model:
 
 ```bash
