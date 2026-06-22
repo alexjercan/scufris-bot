@@ -37,6 +37,8 @@ from scufris_client.client import (
     ScufrisConnectionError,
     ScufrisError,
     ScufrisServerError,
+    StreamEvent,
+    ThinkingEvent,
 )
 
 __all__ = [
@@ -45,4 +47,6 @@ __all__ = [
     "ScufrisConnectionError",
     "ScufrisError",
     "ScufrisServerError",
+    "StreamEvent",
+    "ThinkingEvent",
 ]

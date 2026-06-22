@@ -1,4 +1,4 @@
-"""Unit tests for :mod:`scufris_client.client` — step 2 surface.
+"""Unit tests for :mod:`scufris_client.client`.
 
 Uses :class:`httpx.MockTransport` for transport injection (matches
 the v1 SDK test pattern at
@@ -7,7 +7,7 @@ traffic happens; respx isn't needed because the SDK exposes a
 ``transport`` constructor parameter that makes mocking explicit and
 deterministic.
 
-Coverage in this step (step 2 of #14):
+Coverage (#14 steps 2-3):
 
 - Each JSON-endpoint method's happy path round-trips a body.
 - ``resolve_identity`` defensive check raises on missing ``user_id``.
@@ -17,10 +17,18 @@ Coverage in this step (step 2 of #14):
 - Constructor defaults: env-var resolution, hardcoded fallback,
   trailing-slash normalisation.
 - ``async with`` lifecycle closes the underlying httpx client.
+- ``chat_stream`` end-to-end SSE round-trip: thinking + done /
+  error terminals, keepalive comments, multi-line data,
+  unknown-event synthesis, malformed payload, pre-stream 503,
+  pre-stream connect error, request-body shape.
+- ``sessions`` empty + populated + user_id query param + non-list
+  body rejection.
+- ``clear_session`` cleared-true/false.
+- ``clear`` request-body shape + count response.
 
-Step 3 will extend this module with chat_stream / sessions / clear
-coverage; the test layout (Helpers → constructor → endpoint groups
-→ error mapping) is set up to make those additions painless.
+Section layout: Helpers → constructor → async-cm → endpoint groups
+(healthz, version, resolve_identity, chat_stream, sessions, clear)
+→ shared error-mapping → exception hierarchy.
 """
 
 from __future__ import annotations
@@ -38,6 +46,8 @@ from scufris_client import (
     ScufrisConnectionError,
     ScufrisError,
     ScufrisServerError,
+    StreamEvent,
+    ThinkingEvent,
 )
 from scufris_client.client import DEFAULT_BASE_URL
 

@@ -23,7 +23,7 @@ dependencies = [
 
 [project.scripts]
 scufris-bot = "bot:main"
-scufris-cli = "cli:main"
+scufris-cli = "scufris_cli.__main__:main"
 scufris-server = "scufris_server.__main__:main"
 
 [build-system]
