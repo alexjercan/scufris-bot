@@ -210,8 +210,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 7. Default-model probe — only when opencode is up. Skip when
     # health failed; we'd just hit the same wall again. Cache stays
     # None, so /v1/chat will 503 until opencode comes back.
+    # If ``settings.opencode_model`` is set (via OPENCODE_MODEL env
+    # var) skip the API probe and construct a ModelRef directly.
     default_model: ModelRef | None = None
-    if health is not None:
+    if settings.opencode_model is not None:
+        if "/" in settings.opencode_model:
+            provider_id, model_id = settings.opencode_model.split("/", 1)
+        else:
+            provider_id = "ollama"
+            model_id = settings.opencode_model
+        default_model = ModelRef(providerID=provider_id, modelID=model_id)
+        logger.info(
+            "default model overridden via OPENCODE_MODEL: %s/%s",
+            provider_id,
+            model_id,
+            extra={
+                "default_provider": provider_id,
+                "default_model": model_id,
+            },
+        )
+    elif health is not None:
         try:
             default_model = await asyncio.wait_for(
                 client.get_default_model(),

@@ -40,6 +40,7 @@ get_settings().model_dump()
 | `SCUFRIS_USER_ID`           | _(unset)_                        | int    | Identity override. Pins every `resolve_user` call to this `users.id`. Validated at boot — a stale id crashes startup. See [`003_identity_and_users.md`](003_identity_and_users.md). |
 | `OPENCODE_URL`              | `http://127.0.0.1:4096`          | str    | Where `opencode serve` is reachable. Loopback by default. |
 | `OPENCODE_SERVER_PASSWORD`  | _(unset)_                        | str    | Sent as HTTP basic-auth password (username empty) per opencode's plugin/serve contract. Optional for loopback; warned about at startup if unset for a remote URL. |
+| `OPENCODE_MODEL`            | _(unset)_                        | str    | Override the default model probe. Set to `providerID/modelID` (e.g. `"ollama/qwen3:latest"`) or just a model ID (defaults to `ollama` provider). When unset, the server probes `GET /provider` on startup. |
 
 ### Variables that XDG honours
 
@@ -295,7 +296,9 @@ will emit a `UserWarning` at startup.
   is `None`. Either (a) opencode wasn't reachable at boot — check
   `/v1/healthz`, fix the upstream, restart; or (b) opencode is
   reachable but no connected provider has a default model — check
-  `opencode.json` and your provider configuration.
+  `opencode.json` and your provider configuration; or (c) pin the
+  model explicitly with `OPENCODE_MODEL=provider/model` to bypass
+  the probe entirely.
 - **Logs show `"no config.toml at <path>"` when you have one.** The
   path being logged is the one the loader *actually* used. Compare
   it to `$SCUFRIS_CONFIG`, `$XDG_CONFIG_HOME/scufris/config.toml`,

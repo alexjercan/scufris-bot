@@ -115,6 +115,20 @@ class Settings(BaseSettings):
             "default user (id=1) will resolve."
         ),
     )
+    opencode_model: str | None = Field(
+        default=None,
+        validation_alias="OPENCODE_MODEL",
+        description=(
+            "Override the default model probed from the opencode daemon "
+            "(step 7 of #9). When set, ``app.py`` constructs a "
+            ":class:`~scufris_server.opencode_client.ModelRef` directly "
+            "from ``providerID/modelID`` (``modelID`` alone falls back "
+            "to ``ollama``) and caches it as "
+            "``app.state.opencode_default_model``, skipping the "
+            "``GET /provider`` probe entirely. When ``None`` the "
+            "existing probe logic is retained for backward compatibility."
+        ),
+    )
 
 
 @lru_cache(maxsize=1)

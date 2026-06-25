@@ -58,6 +58,8 @@
         #   1. Add foo to inputs
         #   2. Add foo as a parameter to the outputs function
         #   3. Add here: foo.flakeModule
+        ./nix/modules/flake-module.nix
+        ./nix/hm-modules/flake-module.nix
       ];
       systems = ["x86_64-linux" "aarch64-linux" "aarch64-darwin" "x86_64-darwin"];
       perSystem = {
@@ -211,10 +213,15 @@
           '';
         };
       };
-      flake = {
-        # The usual flake attributes can be defined here, including system-
-        # agnostic ones like nixosModule and system-enumerating ones, although
-        # those are more easily expressed in perSystem.
+    flake = {
+        nixosModules.scufris = import ./nix/modules/scufris.nix {
+          package = self'.packages.scufris-server;
+        };
+        homeManagerModules.scufris = import ./nix/hm-modules/scufris.nix {
+          package = self'.packages.scufris-server;
+        };
+        nixosModules.default = self'.flake.nixosModules.scufris;
+        homeManagerModules.default = self'.flake.homeManagerModules.scufris;
       };
     };
 }

@@ -515,3 +515,42 @@ def test_openapi_metadata_matches_package(tmp_path: Path) -> None:
     assert meta["title"] == "scufris-server"
     assert meta["version"] == __version__
     assert "Scufris daemon" in meta["description"]
+
+
+def test_lifespan_uses_opencode_model_env_var_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """OPENCODE_MODEL env var bypasses the /provider probe entirely."""
+    monkeypatch.setenv("OPENCODE_MODEL", "anthropic/claude-sonnet-4-20250514")
+
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+
+    with respx.mock(base_url=settings.opencode_url, assert_all_called=False) as mock:
+        mock.get("/global/health").mock(return_value=Response(200, json=HEALTH_OK_BODY))
+        provider_route = mock.get("/provider")
+        with TestClient(app):
+            ref = app.state.opencode_default_model
+            assert ref is not None
+            assert ref.providerID == "anthropic"
+            assert ref.modelID == "claude-sonnet-4-20250514"
+
+    # The /provider route should NOT have been called — the env var short-circuits it.
+    assert not provider_route.called
+
+
+def test_lifespan_defaults_to_ollama_provider_when_bare_model_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A bare model ID (no /) defaults to the ollama provider."""
+    monkeypatch.setenv("OPENCODE_MODEL", "qwen3:32b")
+
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+
+    with respx.mock(base_url=settings.opencode_url, assert_all_called=False) as mock:
+        mock.get("/global/health").mock(return_value=Response(200, json=HEALTH_OK_BODY))
+        provider_route = mock.get("/provider")
+        with TestClient(app):
+            ref = app.state.opencode_default_model
+            assert ref is not None
+            assert ref.providerID == "ollama"
+            assert ref.modelID == "qwen3:32b"
+
+    assert not provider_route.called
