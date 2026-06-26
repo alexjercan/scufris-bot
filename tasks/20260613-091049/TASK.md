@@ -750,26 +750,35 @@ independently. User approves 1-2 steps at a time.
       2 source files; `pytest tests/unit` → **45 passed**.
 
 4. **CLI plumbing: `scufris_cli/__init__.py` + `main.py`
-   skeleton (argparse + readline + identity + REPL loop).**
-   - [ ] Create `scufris_cli/__init__.py` (empty).
-   - [ ] Create `scufris_cli/main.py` with:
-         - Constants: `HISTORY_FILE`, `HELP_TEXT`,
-           `THINKING_SHORT_LIMIT`.
-         - `_setup_readline()`, `_save_readline_history()`,
-           `_read_input(console, multiline)`.
-         - `_amain(args)` — sets up Console, loads env vars,
-           opens `ScufrisClient`, runs `healthz()` + identity
-           resolve, prints banner, enters main REPL loop
-           (input read + send chat_stream, print events as
-           plain strings; renderer + slash dispatch land
-           later).
-         - `main()` entry with argparse (`--short-thinking`,
-           `-q`/`--quiet`).
-   - [ ] Tests deferred — module isn't behaviour-complete yet;
-         covered by tests at step 6.
-   - Gates: ruff clean on `scufris_cli/`, mypy --strict clean
-     (D15 — drop strict here if rich friction shows up; note in
-     close-out).
+    skeleton (argparse + readline + identity + REPL loop).**
+    - [x] Create `scufris_cli/__init__.py` (with module comment).
+    - [x] Create `scufris_cli/__main__.py` with:
+          - Constants: `HISTORY_FILE`, `HELP_TEXT`,
+            `THINKING_SHORT_LIMIT`, `_AGENT`.
+          - Helpers: `_truncate`, `_display_name`, `_is_sub_agent`,
+            `_Settings` dataclass.
+          - `_setup_readline()`, `_save_readline_history()`,
+            `_read_input(console, multiline)`.
+          - `make_render_thinking(console, settings)` — 4 branches
+            (tool_call, tool_result, tool_meta, text), no compaction,
+            no prior_turns/context, no is_sub_agent verb split.
+          - `_handle_message(console, client, surface_id, message,
+            render_thinking, logger)` — drives chat_stream, renders
+            thinking events live, panel-prints final reply, handles
+            all 3 error types + KeyboardInterrupt.
+          - `_handle_command(console, client, user_id, surface_id,
+            cmd, multiline, settings) -> (should_exit, new_multiline)`
+            — slash dispatch for all six commands (D4).
+          - `_amain(args)` — sets up Console, loads env vars,
+            opens `ScufrisClient`, runs `healthz()` + identity
+            resolve, prints banner, enters main REPL loop
+            (input read → /command dispatch or chat_stream → render).
+          - `main()` entry with argparse (`--short-thinking`,
+            `-q`/`--quiet`).
+    - [x] Tests deferred — covered by tests at step 6.
+    - Gates: ruff clean on `scufris_cli/` ✓; `ruff format` auto-reformatted 1 file;
+      mypy --strict clean ✓ (removed unused `type: ignore`; D15 strict
+      fully passes — no rich friction observed).
 
 5. **CLI renderer: `make_render_thinking()` + plug into REPL.**
    - [ ] Add `make_render_thinking(console, settings)` to

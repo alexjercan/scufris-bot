@@ -221,7 +221,7 @@ def make_render_thinking(
         # silently dropped — the renderer ignores what it can't handle
         # rather than crashing mid-stream.
 
-    return render  # type: ignore[return-value]
+    return render
 
 
 # ---------------------------------------------------------------------------
@@ -437,9 +437,7 @@ async def _handle_command(
         return False, new_state
 
     # ── unknown ──────────────────────────────────────────────────────────────
-    console.print(
-        f"[red]unknown command:[/red] {cmd!r} — try [bold]/help[/bold]"
-    )
+    console.print(f"[red]unknown command:[/red] {cmd!r} — try [bold]/help[/bold]")
     return False, multiline
 
 
@@ -506,9 +504,7 @@ async def _amain(args: argparse.Namespace) -> None:
         else:
             who = "[dim]user unknown[/dim]"
 
-        banner = (
-            f"[bold]Scufris CLI[/bold] → [dim]{base_url}[/dim] as {who}"
-        )
+        banner = f"[bold]Scufris CLI[/bold] → [dim]{base_url}[/dim] as {who}"
         if bound_surfaces:
             banner += f" — linked surfaces: [dim]{', '.join(bound_surfaces)}[/dim]"
         banner += (
@@ -525,9 +521,7 @@ async def _amain(args: argparse.Namespace) -> None:
         # ── REPL loop ────────────────────────────────────────────────────────
         while True:
             try:
-                user_message = await asyncio.to_thread(
-                    _read_input, console, multiline
-                )
+                user_message = await asyncio.to_thread(_read_input, console, multiline)
             except KeyboardInterrupt:
                 # Ctrl-C at the prompt: blank line, continue.
                 console.print()

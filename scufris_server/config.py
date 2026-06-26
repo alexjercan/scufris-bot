@@ -17,6 +17,7 @@ from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlparse
 
+import dotenv
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -138,6 +139,9 @@ def get_settings() -> Settings:
     Cached after the first call; tests that mutate env vars must call
     ``get_settings.cache_clear()`` to force a re-read.
     """
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
+        dotenv.load_dotenv()
+
     return Settings()
 
 
