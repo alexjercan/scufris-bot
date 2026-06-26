@@ -28,13 +28,13 @@ import readline
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
+from rich import box
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
-from rich import box
 
 from scufris_client import (
     ScufrisAuthError,
@@ -42,7 +42,6 @@ from scufris_client import (
     ScufrisConnectionError,
     ScufrisError,
     ScufrisServerError,
-    StreamEvent,
     ThinkingEvent,
 )
 
@@ -476,10 +475,10 @@ async def _amain(args: argparse.Namespace) -> None:
                 "[dim]Start the daemon with `scufris-server`, or set "
                 "$SCUFRIS_SERVER_URL.[/dim]"
             )
-            raise SystemExit(1)
+            raise SystemExit(1) from exc
         except ScufrisError as exc:
             console.print(f"[bold red]✗ error:[/bold red] {exc}")
-            raise SystemExit(1)
+            raise SystemExit(1) from exc
 
         # ── Identity resolve (D9: degrade, don't bail) ───────────────────────
         user_id: int | None = None

@@ -58,15 +58,12 @@
         #   1. Add foo to inputs
         #   2. Add foo as a parameter to the outputs function
         #   3. Add here: foo.flakeModule
-        ./nix/modules/flake-module.nix
-        ./nix/hm-modules/flake-module.nix
       ];
       systems = ["x86_64-linux" "aarch64-linux" "aarch64-darwin" "x86_64-darwin"];
       perSystem = {
         self',
         pkgs,
         system,
-        lib,
         ...
       }: let
         python = pkgs.python3;
@@ -159,21 +156,21 @@
             type = "app";
             program = "${self.packages.${system}.scufris-server}/bin/scufris-server";
             meta = {
-                description = "SCUFRIS HTTP agent server";
+              description = "SCUFRIS HTTP agent server";
             };
           };
           scufris-cli = {
             type = "app";
             program = "${self.packages.${system}.scufris-cli}/bin/scufris-cli";
             meta = {
-                description = "SCUFRIS command-line interface";
+              description = "SCUFRIS command-line interface";
             };
           };
           scufris-bot = {
             type = "app";
             program = "${self.packages.${system}.scufris-bot}/bin/scufris-bot";
             meta = {
-                description = "SCUFRIS Bot - Telegram bot with AI agent";
+              description = "SCUFRIS Bot - Telegram bot with AI agent";
             };
           };
           default = self'.apps.scufris-server;
@@ -182,12 +179,11 @@
         # `nix flake check` runs the full QA gate. Each derivation
         # operates on a fresh writable copy of the source so caches
         # (mypy, pytest) can land in $TMPDIR rather than /nix/store.
-        checks =
-          {
-            ruff = mkCheck "ruff" "ruff check .";
-            mypy = mkCheck "mypy" "mypy .";
-            pytest = mkCheck "pytest" "pytest";
-          };
+        checks = {
+          ruff = mkCheck "ruff" "ruff check .";
+          mypy = mkCheck "mypy" "mypy .";
+          pytest = mkCheck "pytest" "pytest";
+        };
 
         devShells.default = pkgs.mkShell {
           packages = [
@@ -213,15 +209,18 @@
           '';
         };
       };
-    flake = {
-        nixosModules.scufris = import ./nix/modules/scufris.nix {
-          package = self'.packages.scufris-server;
-        };
+      flake = {
+        # The usual flake attributes can be defined here, including system-
+        # agnostic ones like nixosModule and system-enumerating ones, although
+        # those are more easily expressed in perSystem.
+
+        nixosModules.scufris = import ./nix/modules/scufris.nix;
+        nixosModules.default = self.nixosModules.scufris;
+
         homeManagerModules.scufris = import ./nix/hm-modules/scufris.nix {
-          package = self'.packages.scufris-server;
+          inherit self;
         };
-        nixosModules.default = self'.flake.nixosModules.scufris;
-        homeManagerModules.default = self'.flake.homeManagerModules.scufris;
+        homeManagerModules.default = self.homeManagerModules.scufris;
       };
     };
 }

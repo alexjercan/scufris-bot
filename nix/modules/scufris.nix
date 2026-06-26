@@ -1,13 +1,20 @@
-{ config, lib, pkgs, package, ... }:
-let
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}: let
   cfg = config.services.scufris;
   inherit (lib) mkOption types;
 in {
   options.services.scufris = {
-    enable = mkOption {
-      type = types.bool;
-      default = false;
-      description = "Whether to enable the scufris-server daemon.";
+    enable = lib.mkEnableOption "Whether to enable the scufris-server daemon.";
+
+    package = lib.mkOption {
+      type = lib.types.package;
+      default = pkgs.scufris-server;
+      defaultText = lib.literalExpression "pkgs.scufris-server";
+      description = "The scufris-server package to run.";
     };
 
     opencodeModel = mkOption {
@@ -65,31 +72,86 @@ in {
   };
 
   config = lib.mkIf cfg.enable {
-    environment.systemPackages = [ package ];
-
     systemd.services.scufris-server = {
       description = "Scufris HTTP agent server";
-      wantedBy = [ "multi-user.target" ];
-      wants = [ "network-online.target" ];
-      after = [ "network-online.target" ];
+      wantedBy = ["multi-user.target"];
+      wants = ["network-online.target"];
+      after = ["network-online.target"];
 
-      environment = {
-        SCUFRIS_BIND = cfg.bind;
-        SCUFRIS_PORT = toString cfg.port;
-        OPENCODE_URL = cfg.opencodeUrl;
-      } // lib.optionalAttrs (cfg.opencodePassword != null) {
-        OPENCODE_SERVER_PASSWORD = cfg.opencodePassword;
-      } // lib.optionalAttrs (cfg.opencodeModel != null) {
-        OPENCODE_MODEL = cfg.opencodeModel;
-      } // lib.optionalAttrs (cfg.stateDir != "") {
-        SCUFRIS_STATE_DIR = cfg.stateDir;
-      };
+      environment =
+        {
+          SCUFRIS_BIND = cfg.bind;
+          SCUFRIS_PORT = toString cfg.port;
+          OPENCODE_URL = cfg.opencodeUrl;
+        }
+        // lib.optionalAttrs (cfg.opencodePassword != null) {
+          OPENCODE_SERVER_PASSWORD = cfg.opencodePassword;
+        }
+        // lib.optionalAttrs (cfg.opencodeModel != null) {
+          OPENCODE_MODEL = cfg.opencodeModel;
+        }
+        // lib.optionalAttrs (cfg.stateDir != "") {
+          SCUFRIS_STATE_DIR = cfg.stateDir;
+        };
 
-      serviceConfig = {
-        ExecStart = "${package}/bin/scufris-server";
-        Restart = "on-failure";
-        RestartSec = "5s";
-      };
+      serviceConfig =
+        {
+          # The server does not implement sd_notify; "simple" is correct.
+          Type = "simple";
+          ExecStart = "${cfg.package}/bin/scufris-server";
+          Restart = "on-failure";
+          RestartSec = 5;
+
+          # Server's app.py honours [server].shutdown_grace (default 30s)
+          # and waits for in-flight requests on SIGTERM. Give it a few
+          # extra seconds before systemd escalates to SIGKILL.
+          TimeoutStopSec = 35;
+          KillSignal = "SIGTERM";
+
+          StateDirectory = "scufris";
+          StateDirectoryMode = "0750";
+          RuntimeDirectory = "scufris";
+
+          # ----- hardening -----
+          ProtectSystem = "strict";
+          ProtectHome = true;
+          PrivateTmp = true;
+          PrivateDevices = true;
+          ProtectKernelTunables = true;
+          ProtectKernelModules = true;
+          ProtectKernelLogs = true;
+          ProtectControlGroups = true;
+          ProtectClock = true;
+          ProtectHostname = true;
+          ProtectProc = "invisible";
+          ProcSubset = "pid";
+          NoNewPrivileges = true;
+          RestrictNamespaces = true;
+          RestrictRealtime = true;
+          RestrictSUIDSGID = true;
+          LockPersonality = true;
+          RestrictAddressFamilies = ["AF_INET" "AF_INET6" "AF_UNIX"];
+          SystemCallFilter = ["@system-service" "~@privileged" "~@resources"];
+          SystemCallArchitectures = "native";
+          CapabilityBoundingSet = "";
+          AmbientCapabilities = "";
+          UMask = "0077";
+          PrivateUsers = true;
+        }
+        // lib.optionalAttrs (cfg.environmentFile != null) {
+          EnvironmentFile = cfg.environmentFile;
+        }
+        // lib.optionalAttrs cfg.memoryDenyWriteExecute {
+          MemoryDenyWriteExecute = true;
+        }
+        // (
+          if cfg.user == null
+          then {DynamicUser = true;}
+          else {
+            User = cfg.user;
+            Group = lib.mkIf (cfg.group != null) cfg.group;
+          }
+        );
     };
 
     xdg.configFile."scufris/config.toml" = lib.mkIf (cfg.config != "") {
