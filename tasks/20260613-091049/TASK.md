@@ -722,26 +722,32 @@ independently. User approves 1-2 steps at a time.
      `pytest tests/unit` → **317 passed in 4.49s** (was 292;
      +25 new).
 
-3. **SDK chat + state: `chat_stream()`, `sessions()`,
-   `clear_session()`, `clear()`.**
-   - [ ] Add `StreamEvent` and `ThinkingEvent` dataclasses to
-         `client.py`.
-   - [ ] Implement `_parse_sse_stream(response)` async-iterator
-         helper. Drops comment lines. Yields `(event_name,
-         payload_dict)`.
-   - [ ] Implement `chat_stream(surface, surface_id, agent,
-         message)` — opens POST /v1/chat/stream, iterates the
-         parser, normalizes each event to a `StreamEvent` (D12,
-         D14).
-   - [ ] Implement `sessions(user_id)`, `clear_session(channel_id)`,
-         `clear(user_id)` — plain JSON round-trips.
-   - [ ] Re-export `StreamEvent`, `ThinkingEvent` from
-         `__init__.py`.
-   - [ ] Extend `test_scufris_client.py` — ~10 more tests:
-         chat_stream happy path (thinking → done), error path
-         (thinking → error), comment-line drop, sessions empty
-         + populated, clear_session, clear. ~20 tests total.
-   - Gates: ruff clean, mypy --strict clean, all tests pass.
+3. **[DONE] SDK chat + state: `chat_stream()`, `sessions()`,
+    `clear_session()`, `clear()`.**
+    - [x] Add `StreamEvent` and `ThinkingEvent` dataclasses to
+          `client.py`.
+    - [x] Implement `_parse_sse_stream(response)` async-iterator
+          helper. Drops comment lines. Yields `(event_name,
+          payload_dict)`.
+    - [x] Implement `chat_stream(surface, surface_id, agent,
+          message)` — opens POST /v1/chat/stream, iterates the
+          parser, normalizes each event to a `StreamEvent` (D12,
+          D14).
+    - [x] Implement `sessions(user_id)`, `clear_session(channel_id)`,
+          `clear(user_id)` — plain JSON round-trips.
+    - [x] Re-export `StreamEvent`, `ThinkingEvent` from
+          `__init__.py`.
+    - [x] Extend `test_scufris_client.py` — 14 more tests:
+          chat_stream happy path (thinking → done), error path
+          (thinking → error), comment-line drop, sessions empty
+          + populated + user_id query param + non-list rejection,
+          clear_session cleared-true/false, clear count + zero-count
+          + request-body-shape, SSE parse multiline data + trailing
+          event no final blank + unknown fields dropped, malformed
+          JSON, missing required field. 45 tests total.
+    - Gates **PASS** (verified): `ruff check` clean; `ruff format`
+      clean (3 files already formatted); `mypy --strict` Success on
+      2 source files; `pytest tests/unit` → **45 passed**.
 
 4. **CLI plumbing: `scufris_cli/__init__.py` + `main.py`
    skeleton (argparse + readline + identity + REPL loop).**
