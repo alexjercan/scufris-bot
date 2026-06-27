@@ -781,21 +781,21 @@ independently. User approves 1-2 steps at a time.
       fully passes — no rich friction observed).
 
 5. **CLI renderer: `make_render_thinking()` + plug into REPL.**
-   - [ ] Add `make_render_thinking(console, settings)` to
-         `main.py` per D5: four branches (`tool_call`,
-         `tool_result`, `tool_meta`, `text`), no `compaction`,
-         no `prior_turns`/`context` conditionals, no
-         `is_sub_agent` split.
-   - [ ] Wire `render_thinking` into the REPL: replace the
-         plain-string event printer (step 4) with the
-         renderer's `render_thinking(ev.thinking)` call when
-         `ev.kind == "thinking"`.
-   - [ ] Add `_handle_message(...)` per the v1 port:
-         try/except for all 3 error types + KeyboardInterrupt,
-         final reply via `Panel(Markdown(...))`.
-   - [ ] No tests yet — covered alongside slash dispatch at
-         step 6.
-   - Gates: ruff clean, mypy --strict clean.
+- [x] Add `make_render_thinking(console, settings)` to
+          `main.py` per D5: four branches (`tool_call`,
+          `tool_result`, `tool_meta`, `text`), no `compaction`,
+          no `prior_turns`/`context` conditionals, no
+          `is_sub_agent` split.
+    - [x] Wire `render_thinking` into the REPL: replace the
+          plain-string event printer (step 4) with the
+          renderer's `render_thinking(ev.thinking)` call when
+          `ev.kind == "thinking"`.
+    - [x] Add `_handle_message(...)` per the v1 port:
+          try/except for all 3 error types + KeyboardInterrupt,
+          final reply via `Panel(Markdown(...))`.
+    - [x] No tests yet — covered alongside slash dispatch at
+          step 6.
+    - Gates: ruff clean, mypy --strict clean.
 
 6. **CLI slash dispatch + `/sessions` command.**
    - [ ] Add `_handle_command(...)` with the six commands per

@@ -89,11 +89,6 @@ def _display_name(raw: str) -> str:
     return " ".join(w.capitalize() for w in raw.replace(".", "_").split("_"))
 
 
-def _is_sub_agent(name: str) -> bool:
-    """Return True if *name* looks like an agent rather than a tool call."""
-    return name.startswith("agent_") or name in {"agent", "sub_agent"}
-
-
 # ---------------------------------------------------------------------------
 # Settings bag (mutable, shared across the session)
 # ---------------------------------------------------------------------------
@@ -184,7 +179,7 @@ def make_render_thinking(
             target = _display_name(ev.text)
             # v2 has no sub-agents; hardcode "uses". Kept as a helper call
             # so re-enabling the verb split later is a one-liner.
-            verb = "asks" if _is_sub_agent(ev.text) else "uses"
+            verb = "uses"
             line = f"{indent}→ [cyan]{src}[/cyan] {verb} [bold]{target}[/bold]"
             if ev.arg:
                 arg_text = _truncate(ev.arg, THINKING_SHORT_LIMIT)
@@ -346,6 +341,8 @@ async def _handle_command(
             console.print(f"[bold red]sessions failed:[/bold red] {exc}")
             return False, multiline
 
+        channels.sort(key=lambda x: x.get("last_used_at") or 0, reverse=True)
+
         if not channels:
             console.print("[dim]no sessions yet[/dim]")
             return False, multiline
@@ -439,6 +436,7 @@ async def _handle_command(
     # ── unknown ──────────────────────────────────────────────────────────────
     console.print(f"[red]unknown command:[/red] {cmd!r} — try [bold]/help[/bold]")
     return False, multiline
+
 
 
 # ---------------------------------------------------------------------------
