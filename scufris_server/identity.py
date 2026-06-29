@@ -202,9 +202,7 @@ def load_user_identity(path: Path | None = None) -> IdentityFile:
             "config_path": str(target),
             "found": True,
             "username": parsed.user.username if parsed.user else None,
-            "surfaces": (
-                sorted(parsed.user.identity.keys()) if parsed.user else []
-            ),
+            "surfaces": (sorted(parsed.user.identity.keys()) if parsed.user else []),
         },
     )
     return parsed
@@ -215,9 +213,7 @@ def load_user_identity(path: Path | None = None) -> IdentityFile:
 # ---------------------------------------------------------------------------
 
 
-def _bound_surfaces(
-    conn: sqlite3.Connection, user_id: int
-) -> list[BoundSurface]:
+def _bound_surfaces(conn: sqlite3.Connection, user_id: int) -> list[BoundSurface]:
     """All ``surface_bindings`` rows for ``user_id``, sorted for stability."""
     rows = conn.execute(
         "SELECT surface, surface_id FROM surface_bindings "
@@ -226,16 +222,13 @@ def _bound_surfaces(
         (user_id,),
     ).fetchall()
     return [
-        BoundSurface(surface=r["surface"], surface_id=r["surface_id"])
-        for r in rows
+        BoundSurface(surface=r["surface"], surface_id=r["surface_id"]) for r in rows
     ]
 
 
 def _username_for(conn: sqlite3.Connection, user_id: int) -> str | None:
     """Look up ``users.username`` by id, or ``None`` if no such row."""
-    row = conn.execute(
-        "SELECT username FROM users WHERE id = ?", (user_id,)
-    ).fetchone()
+    row = conn.execute("SELECT username FROM users WHERE id = ?", (user_id,)).fetchone()
     return row["username"] if row is not None else None
 
 
@@ -283,8 +276,7 @@ def _ensure_surface_binding(
     violation on naïve INSERTs.
     """
     existing = conn.execute(
-        "SELECT user_id FROM surface_bindings "
-        "WHERE surface = ? AND surface_id = ?",
+        "SELECT user_id FROM surface_bindings WHERE surface = ? AND surface_id = ?",
         (surface, surface_id),
     ).fetchone()
     if existing is not None:
@@ -376,8 +368,7 @@ def resolve_user(
 
     # 2. Existing binding: cache hit; bindings are sticky.
     existing = conn.execute(
-        "SELECT user_id FROM surface_bindings "
-        "WHERE surface = ? AND surface_id = ?",
+        "SELECT user_id FROM surface_bindings WHERE surface = ? AND surface_id = ?",
         (surface, surface_id),
     ).fetchone()
     if existing is not None:

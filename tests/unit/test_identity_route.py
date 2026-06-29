@@ -125,9 +125,7 @@ def test_resolve_default_fallback_returns_default_user_and_writes_binding(
 
     with connect(settings) as conn:
         rows = list(
-            conn.execute(
-                "SELECT user_id, surface, surface_id FROM surface_bindings"
-            )
+            conn.execute("SELECT user_id, surface, surface_id FROM surface_bindings")
         )
     assert len(rows) == 1
     assert (rows[0]["user_id"], rows[0]["surface"], rows[0]["surface_id"]) == (
@@ -150,10 +148,7 @@ def test_resolve_toml_hit_creates_user_and_binding(tmp_path: Path) -> None:
     - return both in the response."""
     config = _write_config_toml(
         tmp_path / "config.toml",
-        '[user]\n'
-        'username = "alex"\n'
-        '[user.identity]\n'
-        'cli = "alex"\n',
+        '[user]\nusername = "alex"\n[user.identity]\ncli = "alex"\n',
     )
     settings = _make_settings(tmp_path, config_path=config)
     app = create_app(settings)
@@ -184,9 +179,7 @@ def test_resolve_toml_hit_creates_user_and_binding(tmp_path: Path) -> None:
             for r in conn.execute("SELECT id, username FROM users")
         }
         bindings = list(
-            conn.execute(
-                "SELECT user_id, surface, surface_id FROM surface_bindings"
-            )
+            conn.execute("SELECT user_id, surface, surface_id FROM surface_bindings")
         )
     # Both default and alex exist.
     assert users == {"default": 1, "alex": alex_id}
@@ -213,10 +206,7 @@ def test_resolve_override_pins_to_user_id_without_writing_binding(
     # TOML with a different mapping; override must dominate.
     config = _write_config_toml(
         tmp_path / "config.toml",
-        '[user]\n'
-        'username = "alex"\n'
-        '[user.identity]\n'
-        'cli = "alex"\n',
+        '[user]\nusername = "alex"\n[user.identity]\ncli = "alex"\n',
     )
     settings = _make_settings(tmp_path, config_path=config, user_id=1)
     app = create_app(settings)
@@ -245,10 +235,7 @@ def test_resolve_override_pins_to_user_id_without_writing_binding(
         ).fetchone()["n"]
         # The TOML-named user is *also* not auto-created by the override
         # path; only the seeded default exists.
-        usernames = {
-            r["username"]
-            for r in conn.execute("SELECT username FROM users")
-        }
+        usernames = {r["username"] for r in conn.execute("SELECT username FROM users")}
     assert n_bindings == 0
     assert usernames == {"default"}
 
@@ -285,11 +272,7 @@ def test_resolve_is_idempotent_for_same_surface_and_surface_id(
     assert r1.json()["bound_surfaces"] == r2.json()["bound_surfaces"]
 
     with connect(settings) as conn:
-        rows = list(
-            conn.execute(
-                "SELECT surface, surface_id FROM surface_bindings"
-            )
-        )
+        rows = list(conn.execute("SELECT surface, surface_id FROM surface_bindings"))
     assert len(rows) == 1
 
 
@@ -300,9 +283,9 @@ def test_resolve_aggregates_bound_surfaces_across_calls(tmp_path: Path) -> None:
     in subsequent responses regardless of which key triggered them."""
     config = _write_config_toml(
         tmp_path / "config.toml",
-        '[user]\n'
+        "[user]\n"
         'username = "alex"\n'
-        '[user.identity]\n'
+        "[user.identity]\n"
         'cli = "alex"\n'
         'telegram = "8231376426"\n',
     )

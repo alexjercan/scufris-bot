@@ -634,7 +634,7 @@ class ScufrisClient:
                         "agent": agent,
                     },
                 },
-                headers={"Accept": "text/event-stream"},
+                headers={"Accept": "application/json"},
             )
             response = await self._client.send(req, stream=True)
         except httpx.ConnectError as exc:

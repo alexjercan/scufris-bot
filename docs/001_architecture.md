@@ -49,8 +49,8 @@ Three long-running processes, all on the same host by default:
    we treat ollama.
 
 3. **Clients** (`scufris-tg`, `scufris-cli`, future web) — talk to
-   `scufris-server`, never to opencode directly. Today only
-   `scufris-cli` exists in stub form (v2 CLI in #14).
+   `scufris-server`, never to opencode directly. `scufris-cli` is
+   implemented (task `#14`).
 
 There is also one in-process plugin — `.opencode/plugin/scufris.ts` —
 that runs *inside* opencode (not yet implemented; design doc §5.3).
@@ -62,9 +62,24 @@ The "scufris-server ↔ opencode" boundary is deliberately thin: one
 HTTP/SSE client (`scufris_server.opencode_client`) and one in-tree
 plugin. No fork of opencode, no patches.
 
+## Client packages
+
+The CLI and future clients use two new packages:
+
+- **`scufris_client/`** — The official async SDK. It's a thin HTTP client that wraps the server's `/v1/*` surface. It handles identity resolution, SSE parsing, and error mapping.
+- **`scufris_cli/`** — The terminal REPL. It consumes `scufris_client` to drive the chat loop and uses `rich` to render thinking events and replies in a beautiful, human-readable way.
+
 ## Module map
 
 ```
+scufris_client/
+├── __init__.py     # re-exports public surface
+└── client.py       # ScufrisClient + StreamEvent + ThinkingEvent + errors
+
+scufris_cli/
+├── __init__.py     # marker
+└── main.py         # REPL loop + renderer
+
 scufris_server/
 ├── __init__.py            # version constant
 ├── __main__.py            # `python -m scufris_server` entry point

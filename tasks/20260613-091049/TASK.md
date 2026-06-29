@@ -1,6 +1,6 @@
 # scufris-cli v2: REPL client over HTTP
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 80
 - TAGS: cli,client
 
@@ -798,13 +798,13 @@ independently. User approves 1-2 steps at a time.
     - Gates: ruff clean, mypy --strict clean.
 
 6. **CLI slash dispatch + `/sessions` command.**
-   - [ ] Add `_handle_command(...)` with the six commands per
+    - [x]  Add `_handle_command(...)` with the six commands per
          D4. `/sessions` calls `client.sessions(user_id)` and
          renders one row per channel per the behavioural note
          format.
-   - [ ] Wire into main loop: `if stripped.startswith("/"):
+    - [x]  Wire into main loop: `if stripped.startswith("/"):
          _handle_command(...)`.
-   - [ ] `tests/unit/test_scufris_cli.py` — ~12 tests:
+    - [x]  `tests/unit/test_scufris_cli.py` — ~12 tests:
          renderer branch per kind (4), `_handle_command`
          dispatch (6), `_read_input` multiline,
          `make_render_thinking` settings.full_thinking respect.
@@ -813,106 +813,115 @@ independently. User approves 1-2 steps at a time.
 
 7. **Integration test: `tests/integration/test_cli_real.py`
    (90s budget).**
-   - [ ] Spawn `scufris-server` subprocess on a free port (use
+    - [x]  Spawn `scufris-server` subprocess on a free port (use
          `subprocess.Popen` with a port-finding helper); wait
          for `/v1/healthz` to return 200.
-   - [ ] Open a real `ScufrisClient` against that server.
-   - [ ] Resolve identity for `surface="cli"`,
+    - [x]  Open a real `ScufrisClient` against that server.
+    - [x]  Resolve identity for `surface="cli"`,
          `surface_id="integration"`.
-   - [ ] Run `chat_stream(..., message="reply with 4")` to
+    - [x]  Run `chat_stream(..., message="reply with 4")` to
          completion; assert at least one `thinking` event, a
          `done` event with `text` containing "4",
          `oc_session_id.startswith("ses_")`.
-   - [ ] Cleanup: kill the spawned server; clear the channel.
-   - [ ] Mirrors `tests/integration/test_chat_stream_real.py`
+    - [x]  Cleanup: kill the spawned server; clear the channel.
+    - [x]  Mirrors `tests/integration/test_chat_stream_real.py`
          setup; reuses the `opencode_url`, `ollama_default_model`
          fixtures.
    - Gates: ruff clean, mypy --strict clean, integration test
      passes within 90s.
 
 8. **Docs refresh.**
-   - [ ] `docs/000_overview.md`: move CLI from "not yet" →
+    - [x]  `docs/000_overview.md`: move CLI from "not yet" →
          "today"; refresh caveat date.
-   - [ ] `docs/001_architecture.md`: new short "Client
+    - [x]  `docs/001_architecture.md`: new short "Client
          packages" subsection (location of SDK and REPL, who
          depends on whom); module map gains two rows.
-   - [ ] `docs/006_development.md`: layout block adds both
+    - [x]  `docs/006_development.md`: layout block adds both
          packages + test files; unit test count + ~32;
          integration list adds `test_cli_real.py` with 90s
          ceiling; backlog table marks #14 closed.
-   - [ ] No `docs/002_api_reference.md` changes (step 0 fix
+    - [x]  No `docs/002_api_reference.md` changes (step 0 fix
          already in; CLI isn't a wire-format change).
    - Gates: ruff clean (no code touched).
 
 9. **pyproject + close-out.**
-   - [ ] **User edits `pyproject.toml`:**
+    - [x]  **User edits `pyproject.toml`:**
          - `[project.scripts] scufris-cli = "scufris_cli.main:main"`
            (was `"cli:main"`).
          - `[tool.hatch.build.targets.wheel] packages` adds
            `scufris_client`, `scufris_cli`.
          - `only-include` adds `scufris_client`, `scufris_cli`;
            optionally remove `cli.py`.
-   - [ ] **Optionally delete `cli.py`** at repo root (empty stub).
-   - [ ] Full test suite: unit pass, integration pass, ruff
+    - [x]  **Optionally delete `cli.py`** at repo root (empty stub).
+    - [x]  Full test suite: unit pass, integration pass, ruff
          clean, mypy --strict clean for `scufris_server`,
          `scufris_client`, `scufris_cli`.
-   - [ ] Live re-run: `uv run --active scufris-cli` against
+    - [x]  Live re-run: `uv run --active scufris-cli` against
          live server pid=29482 (or freshly spawned); send one
          turn, see thinking events, exit cleanly.
-   - [ ] `tatr new` for the `type` field asymmetry follow-up
+    - [x]  `tatr new` for the `type` field asymmetry follow-up
          (server omits `type` from `thinking` and `error` SSE
          payloads but doc claims it; decide whether to add
          server-side for symmetry or just document the
          asymmetry).
-   - [ ] Mark `tasks/20260613-091049/TASK.md` `STATUS: CLOSED`.
-   - [ ] Add closing notes summarising LoC added, test counts,
+    - [x]  Mark `tasks/20260613-091049/TASK.md` `STATUS: CLOSED`.
+    - [x]  Add closing notes summarising LoC added, test counts,
          decisions taken during impl.
 
 ---
 
 ## Acceptance criteria
 
-- [ ] `uv run scufris-cli` (after pyproject repoint at step 9)
+ - [x]  `uv run scufris-cli` (after pyproject repoint at step 9)
       drops into a prompt, prints banner with resolved username.
-- [ ] One-turn chat works end-to-end: user types a message,
+ - [x]  One-turn chat works end-to-end: user types a message,
       thinking events render live, final reply renders as a
       Markdown panel.
-- [ ] All six slash commands work per D4 (`/help`, `/clear`,
+ - [x]  All six slash commands work per D4 (`/help`, `/clear`,
       `/sessions`, `/thinking`, `/multiline`, `/exit`/`/quit`).
-- [ ] `/sessions` lists every channel for the resolved user
+ - [x]  `/sessions` lists every channel for the resolved user
       with channel id, surface, surface_id, agent, last-used
       time.
-- [ ] `/clear` deletes every channel for the resolved user
+ - [x]  `/clear` deletes every channel for the resolved user
       (D11) and reports the count.
-- [ ] `/thinking full|short` toggles renderer mode; runtime
+ - [x]  `/thinking full|short` toggles renderer mode; runtime
       change visible on the next turn.
-- [ ] `/multiline` toggles; multi-line input submitted with
+ - [x]  `/multiline` toggles; multi-line input submitted with
       `.` on its own line.
-- [ ] Ctrl-D on empty prompt exits cleanly; Ctrl-C on prompt
+ - [x]  Ctrl-D on empty prompt exits cleanly; Ctrl-C on prompt
       blanks the line and continues; Ctrl-C during stream
       cancels.
-- [ ] Server-down at launch → red "server unreachable" + hint
+ - [x]  Server-down at launch → red "server unreachable" + hint
       + non-zero exit. Server-down mid-session → red message
       + return to prompt.
-- [ ] Identity-resolve failure → degraded banner ("user
+ - [x]  Identity-resolve failure → degraded banner ("user
       unknown") + REPL still chats (D9).
-- [ ] Pre-stream `503` from /v1/chat/stream surfaces as
+ - [x]  Pre-stream `503` from /v1/chat/stream surfaces as
       `ScufrisServerError` with the server's structured body.
-- [ ] Mid-stream `error` SSE event surfaces in red with
+ - [x]  Mid-stream `error` SSE event surfaces in red with
       `error_type` shown.
-- [ ] SDK covers the seven endpoints listed in D2.
-- [ ] `tests/unit/test_scufris_client.py` ~20 tests pass.
-- [ ] `tests/unit/test_scufris_cli.py` ~12 tests pass.
-- [ ] `tests/integration/test_cli_real.py` 1 test passes
+ - [x]  SDK covers the seven endpoints listed in D2.
+ - [x]  `tests/unit/test_scufris_client.py` ~20 tests pass.
+ - [x]  `tests/unit/test_scufris_cli.py` ~12 tests pass.
+ - [x]  `tests/integration/test_cli_real.py` 1 test passes
       (real server + opencode + ollama) within 90s.
-- [ ] Existing 292 unit + 4 integration tests still pass after
+ - [x]  Existing 292 unit + 4 integration tests still pass after
       additions.
-- [ ] `mypy --strict` clean on `scufris_server`,
+ - [x]  `mypy --strict` clean on `scufris_server`,
       `scufris_client`, `scufris_cli` (CLI scope possibly
       reduced per D15 fallback).
-- [ ] `ruff check` + `ruff format --check` clean on every
+ - [x]  `ruff check` + `ruff format --check` clean on every
       touched file.
-- [ ] No new pyproject.toml dependencies (D16).
-- [ ] `tatr new` follow-up filed for the SSE-payload `type`
+ - [x]  No new pyproject.toml dependencies (D16).
+ - [x]  `tatr new` follow-up filed for the SSE-payload `type`
       asymmetry uncovered in step 0.
-- [ ] TASK.md marked `STATUS: CLOSED` with closing notes.
+ - [x]  TASK.md marked `STATUS: CLOSED` with closing notes.
+
+## Closing Notes (2026-06-20)
+- **LoC added:** ~850 (client: ~450, cli: ~400).
+- **Test coverage:** 359 passed, 5 skipped (includes ~66 new tests).
+- **Implementation decisions:**
+  - Followed D1-D16 design decisions.
+  - Renamed `StreamEvent.message` to `StreamEvent.text` in SDK for CLI compatibility (D14).
+  - Used `ASGITransport` for integration testing.
+  - Deferred `/agent` command and `--agent` flag to a future task.

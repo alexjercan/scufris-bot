@@ -323,7 +323,7 @@ class OpencodeClient:
         base_url: str,
         password: str | None = None,
         *,
-        timeout: float = 30.0,
+        timeout: float | None = None,
     ) -> None:
         auth = httpx.BasicAuth("", password) if password else None
         self._client = httpx.AsyncClient(

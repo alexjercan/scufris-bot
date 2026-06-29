@@ -1,6 +1,6 @@
 # Set default Ollama model via OPENCODE_MODEL env variable
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 70
 - TAGS: config,server,backend
 

@@ -60,8 +60,7 @@ def conn(tmp_path: Path) -> Iterator[sqlite3.Connection]:
         # Seed the default user — production does this via
         # app._seed_default_user during lifespan.
         c.execute(
-            "INSERT OR IGNORE INTO users (id, username, created_at) "
-            "VALUES (?, ?, ?)",
+            "INSERT OR IGNORE INTO users (id, username, created_at) VALUES (?, ?, ?)",
             (DEFAULT_USER_ID, DEFAULT_USERNAME, int(time.time())),
         )
         c.commit()
@@ -149,9 +148,7 @@ def test_load_user_identity_explicit_path_wins_over_xdg(
     """An explicit ``path=`` arg bypasses XDG resolution."""
     # Set XDG to a directory that does NOT contain config.toml.
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
-    explicit = _write_toml(
-        tmp_path / "elsewhere.toml", '[user]\nusername = "bob"\n'
-    )
+    explicit = _write_toml(tmp_path / "elsewhere.toml", '[user]\nusername = "bob"\n')
     result = load_user_identity(explicit)
     assert result.user is not None
     assert result.user.username == "bob"
@@ -211,8 +208,7 @@ def test_load_user_identity_extra_top_level_keys_ignored(tmp_path: Path) -> None
     """``[server]`` (and anything else outside ``[user]``) is dropped."""
     target = _write_toml(
         tmp_path / "config.toml",
-        '[user]\nusername = "alex"\n\n'
-        '[server]\nport = 9999\nbind = "0.0.0.0"\n',
+        '[user]\nusername = "alex"\n\n[server]\nport = 9999\nbind = "0.0.0.0"\n',
     )
     result = load_user_identity(target)
     assert result.user is not None
@@ -333,8 +329,7 @@ def test_resolve_user_override_includes_bound_surfaces_for_pinned_user(
         (5, "pinned", int(time.time())),
     )
     conn.execute(
-        "INSERT INTO surface_bindings (user_id, surface, surface_id) "
-        "VALUES (?, ?, ?)",
+        "INSERT INTO surface_bindings (user_id, surface, surface_id) VALUES (?, ?, ?)",
         (5, "telegram", "111"),
     )
     conn.commit()
@@ -364,21 +359,17 @@ def test_resolve_user_cached_binding_returns_existing(
         (7, "preexisting", int(time.time())),
     )
     conn.execute(
-        "INSERT INTO surface_bindings (user_id, surface, surface_id) "
-        "VALUES (?, ?, ?)",
+        "INSERT INTO surface_bindings (user_id, surface, surface_id) VALUES (?, ?, ?)",
         (7, "cli", "preexisting"),
     )
     conn.commit()
 
-    resolved = resolve_user(
-        conn, "cli", "preexisting", empty_identity
-    )
+    resolved = resolve_user(conn, "cli", "preexisting", empty_identity)
     assert resolved.user_id == 7
     assert resolved.username == "preexisting"
     # Idempotent: no new row inserted.
     assert (
-        conn.execute("SELECT COUNT(*) AS n FROM surface_bindings").fetchone()["n"]
-        == 1
+        conn.execute("SELECT COUNT(*) AS n FROM surface_bindings").fetchone()["n"] == 1
     )
 
 
@@ -396,8 +387,7 @@ def test_resolve_user_cached_takes_precedence_over_toml(
         (10, "first", int(time.time())),
     )
     conn.execute(
-        "INSERT INTO surface_bindings (user_id, surface, surface_id) "
-        "VALUES (?, ?, ?)",
+        "INSERT INTO surface_bindings (user_id, surface, surface_id) VALUES (?, ?, ?)",
         (10, "cli", "alex"),
     )
     conn.commit()
@@ -431,9 +421,7 @@ def test_resolve_user_toml_hit_creates_user_and_binding(
     assert resolved.user_id != DEFAULT_USER_ID  # new row, not the default
 
     # Verify side effects in DB.
-    row = conn.execute(
-        "SELECT id FROM users WHERE username = 'alex'"
-    ).fetchone()
+    row = conn.execute("SELECT id FROM users WHERE username = 'alex'").fetchone()
     assert row is not None
     assert int(row["id"]) == resolved.user_id
 

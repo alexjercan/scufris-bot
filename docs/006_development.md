@@ -51,15 +51,16 @@ uv run pytest
 
 ```
 scufris-bot/
+├── scufris_client/        # Async SDK for the v2 surface
+├── scufris_cli/           # Terminal REPL consumer
 ├── scufris_server/        # The v2 daemon. Live work happens here.
 │   ├── app.py             # FastAPI factory + lifespan
 │   ├── config.py          # Settings (env-driven)
+│   ├── dependencies.py    # FastAPI Depends() helpers
 │   ├── identity.py        # User resolver + TOML loader
-│   ├── sessions.py        # Channel ↔ opencode-session service layer
 │   ├── opencode_client.py # Async HTTP wrapper for opencode
 │   ├── store.py           # SQLite + migrations
 │   ├── logging.py         # JSON logging, request-id middleware
-│   ├── dependencies.py    # FastAPI Depends() helpers
 │   ├── events.py          # ThinkingEvent + per-process EventBus
 │   ├── event_mapping.py   # Pure mapping opencode/event → ThinkingEvent
 │   ├── sse.py             # SSE wire framing + keepalive helper
@@ -78,13 +79,17 @@ scufris-bot/
 ```
 
 ## Tests
+... (I'll use a larger block to avoid mistakes)
+
+
+## Tests
 
 Two suites:
 
 | Suite | Command | What it runs | Network? |
 |-------|---------|--------------|----------|
-| Unit | `uv run --active pytest` (or just `uv run --active pytest -m "not integration"`) | Everything in `tests/unit/`. ~290 tests. | No. opencode + ollama mocked via `respx`. |
-| Integration | `uv run --active pytest -m integration` | Tests in `tests/integration/` (`test_chat_real.py`, `test_chat_stream_real.py`, `test_sessions_real.py`). | Yes. Needs live opencode + ollama with `qwen3:latest` pulled. |
+| Unit | `uv run --active pytest` (or just `uv run --active pytest -m "not integration"`) | Everything in `tests/unit/`. ~340 tests. | No. opencode + ollama mocked via `respx`. |
+| Integration | `uv run --active pytest -m integration` | Tests in `tests/integration/` (`test_chat_real.py`, `test_chat_stream_real.py`, `test_sessions_real.py`, `test_cli_real.py`). | Yes. Needs live opencode + ollama with `qwen3:latest` pulled. |
 
 ### Unit tests
 
@@ -131,6 +136,7 @@ Today there are three:
   clear one, list again, bulk clear, list again. Verifies the ADR-13
   "scufris doesn't destroy upstream sessions" invariant by snapshotting
   opencode's `GET /session` before and after each clear.
+- `test_cli_real.py` — exercises the CLI end-to-end against a real server.
 
 Prerequisites:
 

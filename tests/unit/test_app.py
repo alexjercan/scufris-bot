@@ -517,7 +517,9 @@ def test_openapi_metadata_matches_package(tmp_path: Path) -> None:
     assert "Scufris daemon" in meta["description"]
 
 
-def test_lifespan_uses_opencode_model_env_var_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_lifespan_uses_opencode_model_env_var_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """OPENCODE_MODEL env var bypasses the /provider probe entirely."""
     monkeypatch.setenv("OPENCODE_MODEL", "anthropic/claude-sonnet-4-20250514")
 
@@ -537,7 +539,9 @@ def test_lifespan_uses_opencode_model_env_var_override(tmp_path: Path, monkeypat
     assert not provider_route.called
 
 
-def test_lifespan_defaults_to_ollama_provider_when_bare_model_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_lifespan_defaults_to_ollama_provider_when_bare_model_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A bare model ID (no /) defaults to the ollama provider."""
     monkeypatch.setenv("OPENCODE_MODEL", "qwen3:32b")
 

@@ -45,6 +45,14 @@ from scufris_client import (
     ThinkingEvent,
 )
 
+__all__ = [
+    "_handle_command",
+    "_handle_message",
+    "_read_input",
+    "_Settings",
+    "make_render_thinking",
+]
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -171,50 +179,54 @@ def make_render_thinking(
     conditionals, ``is_sub_agent`` verb split (depth always 0 in v2).
     """
 
+    state = {"at_line_start": True}  # closure-local cursor tracking
+
+    def _ensure_newline() -> None:
+        if not state["at_line_start"]:
+            console.print()
+            state["at_line_start"] = True
+
     def render(ev: ThinkingEvent) -> None:
-        indent = "  " * ev.depth  # always "" in v2 (depth==0), but defensive
+        indent = "  " * ev.depth
         src = _display_name(ev.source)
 
         if ev.kind == "tool_call":
+            _ensure_newline()
             target = _display_name(ev.text)
-            # v2 has no sub-agents; hardcode "uses". Kept as a helper call
-            # so re-enabling the verb split later is a one-liner.
             verb = "uses"
             line = f"{indent}→ [cyan]{src}[/cyan] {verb} [bold]{target}[/bold]"
             if ev.arg:
                 arg_text = _truncate(ev.arg, THINKING_SHORT_LIMIT)
                 line += f": [grey50]{arg_text}[/grey50]"
             console.print(line)
+            state["at_line_start"] = True
 
         elif ev.kind == "tool_result":
-            # First-class in v2 (D5). Server emits one per completed/error tool.
+            _ensure_newline()
             text = ev.text.replace("\n", " ")
             if not settings.full_thinking:
                 text = _truncate(text, THINKING_SHORT_LIMIT)
-            # Failure heuristic: server formats error results as "<tool> failed: …"
             if "failed:" in text:
                 console.print(f"{indent}[red]✗ {text}[/red]")
             else:
                 tool_name = _display_name(ev.text.split("\n")[0])
                 console.print(f"{indent}[green]↩ {tool_name}[/green]")
+            state["at_line_start"] = True
 
         elif ev.kind == "tool_meta":
-            # Permission events, annotations, notes. Always dim.
+            _ensure_newline()
             text = ev.text.replace("\n", " ")
             if not settings.full_thinking:
                 text = _truncate(text, THINKING_SHORT_LIMIT)
             console.print(f"{indent}  [grey50]ℹ {text}[/grey50]")
+            state["at_line_start"] = True
 
         elif ev.kind == "text":
-            # Streaming token chunk — show as a grey delta.
             text = ev.text.replace("\n", " ")
             if not settings.full_thinking:
                 text = _truncate(text, THINKING_SHORT_LIMIT)
             console.print(f"{indent}[grey50]{text}[/grey50]", end="")
-
-        # Defensive: unknown kinds (e.g. future server additions) are
-        # silently dropped — the renderer ignores what it can't handle
-        # rather than crashing mid-stream.
+            state["at_line_start"] = False
 
     return render
 
@@ -436,7 +448,6 @@ async def _handle_command(
     # ── unknown ──────────────────────────────────────────────────────────────
     console.print(f"[red]unknown command:[/red] {cmd!r} — try [bold]/help[/bold]")
     return False, multiline
-
 
 
 # ---------------------------------------------------------------------------

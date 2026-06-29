@@ -41,7 +41,7 @@ carries over verbatim).
 fronts `opencode serve` and exposes `/v1/*` to clients. Every doc in
 this folder is about v2 unless explicitly stated.
 
-## Current scope (as of #12 closing)
+## Current scope (as of #14 closing)
 
 What's implemented today:
 
@@ -50,8 +50,8 @@ What's implemented today:
 - Identity layer (`#12`): TOML-driven user resolution + a
   `SCUFRIS_USER_ID` server-side override.
 - Endpoints: `GET /v1/healthz`, `GET /v1/version`,
-  `POST /v1/identity/resolve`, `POST /v1/chat`,
-  `POST /v1/chat/stream`, `GET /v1/sessions`,
+  `POST /v1/identity/resolve`, `POST /v1/chat/stream`,
+  `GET /v1/sessions`,
   `POST /v1/sessions/{channel_id}/clear`, `POST /v1/clear`.
 - Async opencode client wrapping a useful subset of opencode's HTTP
   API (health, default-model probe, create_session, send_message,
@@ -60,13 +60,13 @@ What's implemented today:
   cache in SQLite. The streaming path consumes a per-process
   `EventBus` that reads opencode `/event` once and fans out to
   subscribers (ADR-10).
+- v2 CLI client — [DONE] task `#14` (`tasks/20260613-091049`).
 
 What's *not* implemented yet (placeholder modules exist):
 
 - Stats / per-user telemetry — task `#13`
   (`tasks/20260613-091047`).
 - Permission UX bridge — task `#30` (`tasks/20260613-093108`).
-- v2 CLI client — task `#14` (`tasks/20260613-091049`).
 - Channel fork (`POST /v1/sessions/{id}/fork`) — task `#33`
   (`tasks/20260616-111428`).
 - Channel server-side expire — task `#34`

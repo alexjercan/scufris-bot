@@ -1,21 +1,24 @@
 import asyncio
 import io
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from rich.console import Console
-from scufris_client import (
-    ScufrisClient,
-    ScufrisError,
-    StreamEvent,
-    ThinkingEvent,
-)
+
 from scufris_cli.__main__ import (
     _handle_command,
-    make_render_thinking,
-    _Settings,
+    _handle_message,
     _read_input,
+    _Settings,
+    make_render_thinking,
+)
+from scufris_client import (
+    ScufrisAuthError,
+    ScufrisClient,
+    ScufrisConnectionError,
+    ScufrisServerError,
+    StreamEvent,
+    ThinkingEvent,
 )
 
 
@@ -32,7 +35,7 @@ def mock_client():
     client = MagicMock(spec=ScufrisClient)
     client.sessions = AsyncMock()
     client.clear = AsyncMock()
-    client.chat_stream = AsyncMock()
+    client.chat_stream = MagicMock()
     return client
 
 
@@ -206,6 +209,7 @@ async def test_handle_command_multiline_toggle(console, mock_client):
 def test_read_input_eof():
     # Mock input to raise EOFError
     from unittest.mock import patch
+
     with patch("builtins.input", side_effect=EOFError):
         console = Console(file=io.StringIO(), color_system=None)
         res = _read_input(console, False)
@@ -214,6 +218,7 @@ def test_read_input_eof():
 
 def test_read_input_multiline_finish():
     from unittest.mock import patch
+
     # First line, then ".", then EOF
     with patch("builtins.input", side_effect=["hello", ".", EOFError]):
         console = Console(file=io.StringIO(), color_system=None)
@@ -228,4 +233,159 @@ async def test_handle_command_unknown(console, mock_client):
         console, mock_client, 1, "cli", "/unknown", False, _Settings()
     )
     assert should_exit is False
-    assert "unknown command" in file.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_handle_command_thinking_modes(console, mock_client):
+    console, file = console
+    settings = _Settings()
+
+    # 1. /thinking full
+    should_exit, new_multiline = await _handle_command(
+        console, mock_client, 1, "cli", "/thinking full", False, settings
+    )
+    assert should_exit is False
+    assert settings.full_thinking is True
+    assert "thinking mode: full" in file.getvalue()
+    file.truncate(0)
+    file.seek(0)
+
+    # 2. /thinking short
+    should_exit, new_multiline = await _handle_command(
+        console, mock_client, 1, "cli", "/thinking short", False, settings
+    )
+    assert should_exit is False
+    assert settings.full_thinking is False
+    assert "thinking mode: short" in file.getvalue()
+    file.truncate(0)
+    file.seek(0)
+
+    # 3. /thinking invalid
+    should_exit, new_multiline = await _handle_command(
+        console, mock_client, 1, "cli", "/thinking invalid", False, settings
+    )
+    assert should_exit is False
+    assert "unknown thinking mode" in file.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_handle_command_sessions_degraded(console, mock_client):
+    console, file = console
+    # user_id is None
+    should_exit, _ = await _handle_command(
+        console, mock_client, None, "cli", "/sessions", False, _Settings()
+    )
+    assert should_exit is False
+    assert "identity unavailable" in file.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_handle_command_clear_degraded(console, mock_client):
+    console, file = console
+    # user_id is None
+    should_exit, _ = await _handle_command(
+        console, mock_client, None, "cli", "/clear", False, _Settings()
+    )
+    assert should_exit is False
+    assert "identity unavailable" in file.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_handle_message_success(console, mock_client):
+    console, file = console
+    logger = MagicMock()
+
+    # Mocking async generator for chat_stream
+    async def mock_stream(*args, **kwargs):
+        yield StreamEvent(
+            kind="thinking",
+            thinking=ThinkingEvent(
+                kind="text", text="thinking", source="scufris", depth=0
+            ),
+        )
+        yield StreamEvent(kind="done", text="hello world")
+
+    mock_client.chat_stream.side_effect = mock_stream
+
+    await _handle_message(
+        console, mock_client, "test-surface", "hello", lambda x: None, logger
+    )
+
+    output = file.getvalue()
+    assert "hello world" in output
+    # Check if it printed a panel (roughly)
+    assert "scufris" in output
+
+
+@pytest.mark.asyncio
+async def test_handle_message_error_event(console, mock_client):
+    console, file = console
+    logger = MagicMock()
+
+    async def mock_stream(*args, **kwargs):
+        yield StreamEvent(
+            kind="error", error="something went wrong", error_type="api_error"
+        )
+
+    mock_client.chat_stream.side_effect = mock_stream
+
+    await _handle_message(
+        console, mock_client, "test-surface", "hello", lambda x: None, logger
+    )
+
+    assert "something went wrong" in file.getvalue()
+    assert "api_error" in file.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_handle_message_connection_error(console, mock_client):
+    console, file = console
+    logger = MagicMock()
+
+    mock_client.chat_stream.side_effect = ScufrisConnectionError("connection refused")
+
+    await _handle_message(
+        console, mock_client, "test-surface", "hello", lambda x: None, logger
+    )
+
+
+@pytest.mark.asyncio
+async def test_handle_message_auth_error(console, mock_client):
+    console, file = console
+    logger = MagicMock()
+
+    mock_client.chat_stream.side_effect = ScufrisAuthError("auth failed")
+
+    await _handle_message(
+        console, mock_client, "test-surface", "hello", lambda x: None, logger
+    )
+
+    assert "auth failed" in file.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_handle_message_server_error(console, mock_client):
+    console, file = console
+    logger = MagicMock()
+
+    mock_client.chat_stream.side_effect = ScufrisServerError("server error")
+
+    await _handle_message(
+        console, mock_client, "test-surface", "hello", lambda x: None, logger
+    )
+
+    assert "server error" in file.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_handle_message_cancelled(console, mock_client):
+    console, file = console
+    logger = MagicMock()
+
+    mock_client.chat_stream.side_effect = asyncio.CancelledError()
+
+    await _handle_message(
+        console, mock_client, "test-surface", "hello", lambda x: None, logger
+    )
+
+    assert "interrupted — server canceled" in file.getvalue()

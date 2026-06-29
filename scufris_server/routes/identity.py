@@ -47,9 +47,7 @@ class ResolveRequest(BaseModel):
     at the validation layer.
     """
 
-    surface: str = Field(
-        ..., min_length=1, description="cli | telegram | web | ..."
-    )
+    surface: str = Field(..., min_length=1, description="cli | telegram | web | ...")
     surface_id: str = Field(
         ...,
         min_length=1,

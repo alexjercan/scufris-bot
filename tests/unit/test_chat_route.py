@@ -517,10 +517,7 @@ def test_chat_binds_to_toml_user_when_surface_id_matches(tmp_path: Path) -> None
     through to the persistence layer."""
     config = _write_config_toml(
         tmp_path / "config.toml",
-        '[user]\n'
-        'username = "alex"\n'
-        '[user.identity]\n'
-        'cli = "alex"\n',
+        '[user]\nusername = "alex"\n[user.identity]\ncli = "alex"\n',
     )
     settings = Settings(
         state_dir=tmp_path,
@@ -556,9 +553,7 @@ def test_chat_binds_to_toml_user_when_surface_id_matches(tmp_path: Path) -> None
             "SELECT user_id, surface, surface_id FROM channels"
         ).fetchone()
         bindings = list(
-            conn.execute(
-                "SELECT user_id, surface, surface_id FROM surface_bindings"
-            )
+            conn.execute("SELECT user_id, surface, surface_id FROM surface_bindings")
         )
 
     # Both default and the TOML user exist; alex is not user 1.
@@ -589,10 +584,7 @@ def test_chat_with_identity_override_pins_user_id_and_skips_binding(
     deliberate detour around the binding table."""
     config = _write_config_toml(
         tmp_path / "config.toml",
-        '[user]\n'
-        'username = "alex"\n'
-        '[user.identity]\n'
-        'cli = "alex"\n',
+        '[user]\nusername = "alex"\n[user.identity]\ncli = "alex"\n',
     )
     settings = Settings(
         state_dir=tmp_path,
@@ -627,9 +619,7 @@ def test_chat_with_identity_override_pins_user_id_and_skips_binding(
         n_bindings = conn.execute(
             "SELECT COUNT(*) AS n FROM surface_bindings"
         ).fetchone()["n"]
-        usernames = {
-            r["username"] for r in conn.execute("SELECT username FROM users")
-        }
+        usernames = {r["username"] for r in conn.execute("SELECT username FROM users")}
 
     assert channel_row is not None
     assert channel_row["user_id"] == 1
@@ -679,13 +669,9 @@ def test_chat_default_fallback_writes_binding_then_reuses_it(
 
     with connect(settings) as conn:
         bindings = list(
-            conn.execute(
-                "SELECT user_id, surface, surface_id FROM surface_bindings"
-            )
+            conn.execute("SELECT user_id, surface, surface_id FROM surface_bindings")
         )
-        n_channels = conn.execute(
-            "SELECT COUNT(*) AS n FROM channels"
-        ).fetchone()["n"]
+        n_channels = conn.execute("SELECT COUNT(*) AS n FROM channels").fetchone()["n"]
 
     # Binding materialised once on first call; cache hit on second.
     assert len(bindings) == 1
