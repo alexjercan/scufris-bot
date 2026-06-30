@@ -1,6 +1,6 @@
 # Telegram bot v2: migrate to scufris_client
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 100
 - TAGS: telegram,bot,scufris-client
 
@@ -117,39 +117,39 @@ Out of scope:
 
 ## Acceptance criteria
 
-- [ ] `scufris_bot/__main__.py` imports and calls only methods that exist on
+- [x] `scufris_bot/__main__.py` imports and calls only methods that exist on
   the current `scufris_client.ScufrisClient` — no calls to methods that aren't
   part of the SDK's public surface.
-- [ ] `/start`-equivalent plain chat messages stream correctly:
+- [x] `/start`-equivalent plain chat messages stream correctly:
       typing indicator fires, placeholder message appears and is
       live-edited as `thinking` events arrive, final answer is sent
       as a new message with the "Show thinking ▼" toggle attached.
-- [ ] Tapping "Show thinking" / "Hide thinking" still works against
+- [x] Tapping "Show thinking" / "Hide thinking" still works against
       the new event data (trace text reconstruction unaffected by the
       `chat_stream` signature change).
-- [ ] `/clear` correctly reports the number of cleared
+- [x] `/clear` correctly reports the number of cleared
       messages/sessions using the new client's actual response shape
       (field name verified, not assumed).
-- [ ] `/stats` either works end-to-end against a real server endpoint,
+- [x] `/stats` either works end-to-end against a real server endpoint,
       or is cleanly stubbed with a clear "not available yet" message
       — not left calling a nonexistent method that throws an
       `AttributeError` at runtime.
-- [ ] All three existing error paths (`ScufrisConnectionError`,
+- [x] All three existing error paths (`ScufrisConnectionError`,
       `ScufrisAuthError`, `ScufrisServerError`) are still caught in
       `chat`, `clear_history`, and `stats_command` and produce the
       same user-facing error messages as before (modulo `/stats`
       depending on Q2's resolution).
-- [ ] `_post_init`'s server reachability probe (`healthz`) still
+- [x] `_post_init`'s server reachability probe (`healthz`) still
       gates bot startup the same way (`SystemExit(1)` on
       unreachable/auth-failed/error).
-- [ ] No regression in placeholder edit rate-limiting or message
+- [x] No regression in placeholder edit rate-limiting or message
       chunking/truncation behavior (`PLACEHOLDER_EDIT_INTERVAL`,
       `PLACEHOLDER_MAX_LEN`, `TELEGRAM_MAX_MESSAGE` logic untouched
       unless the new event shape forces a change).
-- [ ] Manual smoke test: send a message, confirm streamed thinking
+- [x] Manual smoke test: send a message, confirm streamed thinking
       updates appear, confirm final answer + toggle, confirm
       `/clear` and `/stats` (or its stub) behave as expected.
-- [ ] No leftover references to old client method signatures or
+- [x] No leftover references to old client method signatures or
       removed exception types.
 
 ## Notes for implementer
