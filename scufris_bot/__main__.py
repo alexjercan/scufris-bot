@@ -356,8 +356,34 @@ class PlaceholderRenderer:
         self._last_edit = 0.0
         self._pending = False
         self._closed = False
+        # Tracks whether the most recently appended line is an
+        # in-progress streamed "text" chunk, and from which source —
+        # so the next "text" event from the *same* source extends that
+        # line instead of starting a new one. Any non-"text" event (or
+        # a "text" event from a different source) ends the streak.
+        self._streaming_text_source: Optional[str] = None
 
     def add(self, ev: ThinkingEvent) -> None:
+        src = display_name(ev.source)
+
+        # "text" events are small token chunks streamed from the model
+        # (see cli.py's renderer, which concatenates them with end="").
+        # Merge consecutive chunks from the same source onto one line
+        # instead of emitting a new "💭 src: ..." line per chunk.
+        if ev.kind == "text":
+            chunk = ev.text.replace("\n", " ")
+            if not chunk:
+                return
+            indent = "  " * ev.depth
+            if self._streaming_text_source == src and self._lines:
+                self._lines[-1] += chunk
+            else:
+                self._lines.append(f"{indent}  💭 {src}: {chunk}")
+                self._streaming_text_source = src
+            self._pending = True
+            return
+
+        self._streaming_text_source = None
         line = self._format(ev)
         if line is None:
             return
@@ -384,10 +410,8 @@ class PlaceholderRenderer:
             n_msg = ev.evicted or 0
             n_facts = ev.new_facts or 0
             return f"🧹 [memory] {ev.source}: compacted {n_msg} msg(s), +{n_facts} fact(s)"
-        if ev.kind == "text":
-            text = ev.text.replace("\n", " ")
-            return f"{indent}  💭 {src}: {text}"
         # tool_result and unknown kinds — keep a short note for parity
+        # ("text" is handled directly in add() and never reaches here).
         text = ev.text.replace("\n", " ")
         return f"{indent}  ↩ {text}"
 
